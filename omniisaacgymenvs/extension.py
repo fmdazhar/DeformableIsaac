@@ -496,9 +496,6 @@ class RLExtension(omni.ext.IExt):
             print(traceback.format_exc())
         finally:
             self._is_training = False
-            if self._task._dr_randomizer.randomize:
-                await self._task._dr_randomizer.rep.orchestrator.stop_async()
-                self._task._dr_randomizer.rep.orchestrator._orchestrator.shutdown()
 
     def _on_train(self):
         # stop simulation if still running

@@ -43,7 +43,6 @@ from omni.isaac.core.utils.prims import define_prim
 from omni.isaac.core.utils.stage import get_current_stage
 from omni.isaac.core.utils.types import ArticulationAction
 from .rl_task_interface import RLTaskInterface
-from omniisaacgymenvs.utils.domain_randomization.randomize import Randomizer
 from pxr import Gf, UsdGeom, UsdLux
 
 
@@ -73,13 +72,6 @@ class RLTask(RLTaskInterface):
         self.test = self._cfg["test"]
         self._device = self._cfg["sim_device"]
 
-        # set up randomizer for DR
-        self._dr_randomizer = Randomizer(self._cfg, self._task_cfg)
-        if self._dr_randomizer.randomize:
-            import omni.replicator.isaac as dr
-
-            self.dr = dr
-
         # set up replicator for camera data collection
         self.enable_cameras = self._task_cfg["sim"].get("enable_cameras", False)
         if self.enable_cameras:
@@ -92,9 +84,6 @@ class RLTask(RLTaskInterface):
             self.PytorchListener = PytorchListener
 
         print("Task Device:", self._device)
-
-        self.randomize_actions = False
-        self.randomize_observations = False
 
         self.clip_obs = self._task_cfg["env"].get("clipObservations", np.Inf)
         self.clip_actions = self._task_cfg["env"].get("clipActions", np.Inf)
@@ -202,7 +191,7 @@ class RLTask(RLTaskInterface):
                 self._create_distant_light()
         # initialize capturer for viewport recording
         # this has to be called after initializing replicator for DR
-        if self._cfg.get("enable_recording", False) and not self._dr_randomizer.randomize:
+        if self._cfg.get("enable_recording", False):
             self._env.create_viewport_render_product(resolution=(self.viewport_camera_width, self.viewport_camera_height))
 
     def set_initial_camera_params(self, camera_position, camera_target):
@@ -232,7 +221,7 @@ class RLTask(RLTaskInterface):
         self._env_pos = torch.tensor(np.array(pos), device=self._device, dtype=torch.float)
         if self._env.render_enabled:
             # initialize capturer for viewport recording
-            if self._cfg.get("enable_recording", False) and not self._dr_randomizer.randomize:
+            if self._cfg.get("enable_recording", False):
                 self._env.create_viewport_render_product(resolution=(self.viewport_camera_width, self.viewport_camera_height))
 
     @property

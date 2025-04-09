@@ -41,7 +41,6 @@ from omniisaacgymenvs.utils.hydra_cfg.hydra_utils import *
 from omniisaacgymenvs.utils.hydra_cfg.reformat import omegaconf_to_dict, print_dict
 from omniisaacgymenvs.utils.rlgames.rlgames_utils import RLGPUAlgoObserver, RLGPUEnv
 from omniisaacgymenvs.utils.task_util import initialize_task
-from rl_games.common import env_configurations, vecenv
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
 
@@ -55,11 +54,6 @@ class RLGTrainer:
         # `create_rlgpu_env` is environment construction function which is passed to RL Games and called internally.
         # We use the helper function here to specify the environment config.
         self.cfg_dict["task"]["test"] = self.cfg.test
-
-        # register the rl-games adapter to use inside the runner
-        vecenv.register("RLGPU", lambda config_name, num_actors, **kwargs: RLGPUEnv(config_name, num_actors, **kwargs))
-        env_configurations.register("rlgpu", {"vecenv_type": "RLGPU", "env_creator": lambda **kwargs: env})
-
         self.rlg_config_dict = omegaconf_to_dict(self.cfg.train)
 
     def run(self, env, module_path, experiment_dir):
@@ -84,19 +78,14 @@ class RLGTrainer:
             )
 
         device = 'cuda:0'
-        # runner = Runner(env, device=device)
         runner = OnPolicyRunner(env, self.rlg_config_dict, log_dir, device=device)
-        runner.learn(num_learning_iterations=1000000, init_at_random_ep_len=True)
+        runner.learn(num_learning_iterations=self.rlg_config_dict["runner"]["max_iterations"], init_at_random_ep_len=True)
 
 
         # dump config dict
         os.makedirs(experiment_dir, exist_ok=True)
         with open(os.path.join(experiment_dir, "config.yaml"), "w") as f:
             f.write(OmegaConf.to_yaml(self.cfg))
-
-        runner.run(
-            {"train": not self.cfg.test, "play": self.cfg.test, "checkpoint": self.cfg.checkpoint, "sigma": None}
-        )
 
 
 @hydra.main(version_base=None, config_name="config", config_path="../cfg")
