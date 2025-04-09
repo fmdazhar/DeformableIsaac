@@ -35,14 +35,14 @@ from .vec_env_base import VecEnvBase
 
 
 # VecEnv Wrapper for RL training
-class VecEnvRLGames(VecEnvBase):
+class VecEnv(VecEnvBase):
     def _process_data(self):
         self._obs = self._obs.to(self._task.rl_device)
         if self._priv_obs is not None:
             self._priv_obs = self._priv_obs.to(self._task.rl_device)
         self._rew = self._rew.to(self._task.rl_device)
         self._resets = self._resets.to(self._task.rl_device)
-        self._extras = self._extras
+        self._extras = self._extras.to(self._task.rl_device)
 
     def set_task(self, task, backend="numpy", sim_params=None, init_sim=True, rendering_dt=1.0 / 60.0) -> None:
         super().set_task(task, backend, sim_params, init_sim, rendering_dt)

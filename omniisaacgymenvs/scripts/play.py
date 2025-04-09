@@ -38,7 +38,7 @@ import numpy as np
 import torch
 
 import omniisaacgymenvs
-from omniisaacgymenvs.envs.vec_env_rlgames import VecEnvRLGames
+from omniisaacgymenvs.envs.vec_env import VecEnv
 from omniisaacgymenvs.utils.config_utils.path_utils import get_experience
 from omniisaacgymenvs.utils.hydra_cfg.hydra_utils import *
 from omniisaacgymenvs.utils.hydra_cfg.reformat import omegaconf_to_dict, print_dict
@@ -62,7 +62,7 @@ def parse_hydra_configs(cfg: DictConfig):
     # select kit app file
     experience = get_experience(headless, cfg.enable_livestream, enable_viewport, cfg.enable_recording, cfg.kit_app)
 
-    env = VecEnvRLGames(
+    env = VecEnv(
         headless=headless,
         sim_device=cfg.device_id,
         enable_livestream=cfg.enable_livestream,
