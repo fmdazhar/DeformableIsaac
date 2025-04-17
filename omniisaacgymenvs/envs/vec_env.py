@@ -64,7 +64,9 @@ class VecEnv(VecEnvBase):
 
         print(f"VecEnv: num_states={self.num_states}, num_observations={self.num_obs}, "
               f"num_privileged_observations={self.num_privileged_obs}, num_obs_history={self.num_obs_history}, "
-              f"num_actions={self.num_actions}, num_train_envs={self.num_train_envs}, max_episode_length={self.max_episode_length}")
+              f"num_actions={self.num_actions}, num_train_envs={self.num_train_envs}, max_episode_length={self.max_episode_length}", 
+              f"num_height_points={self.num_height_points}, num_proprio={self.num_proprio}, "
+              f"num_priv={self.num_priv}, history_len={self.history_len}")
 
     def step(self, actions):
         # only enable rendering when we are recording, or if the task already has it enabled

@@ -84,7 +84,7 @@ class AnymalTerrainTask(RLTask):
         if self.measure_heights:
             self.height_points = self.init_height_points()
         self.measured_heights = None
-        self.debug_heights = True
+        self.debug_heights = False
 
         # Initialize dictionaries to track created particle systems and materials
         self.created_particle_systems = {}
@@ -1182,7 +1182,7 @@ class AnymalTerrainTask(RLTask):
 
         # 3) If measuring heights, compute them and concatenate AFTER the proprio block.
         if self.measure_heights:
-            self.measured_heights = self.get_heights_below_foot()
+            self.measured_heights = self.get_heights()
             if self.debug_heights:
                 # self._visualize_terrain_heights() 
                 # self._visualize_depression_indices()

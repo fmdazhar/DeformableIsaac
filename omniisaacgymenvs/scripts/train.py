@@ -206,15 +206,15 @@ def parse_hydra_configs(cfg: DictConfig):
             }
         ]
         cfg.task.env.learn.addNoise = False
-        cfg.task.env.learn.randomizationRanges.randomizeGravity = False
-        cfg.task.env.learn.randomizationRanges.randomizeFriction = False
-        cfg.task.env.learn.randomizationRanges.randomizeCOM = False
-        cfg.task.env.learn.randomizationRanges.randomizeAddedMass = False
-        cfg.task.env.learn.randomizationRanges.randomizeMotorStrength = False
-        cfg.task.env.learn.randomizationRanges.randomizeMotorOffset = False
-        cfg.task.env.learn.randomizationRanges.randomizeKpFactor = False
-        cfg.task.env.learn.randomizationRanges.randomizeKdFactor = False
-        cfg.task.env.learn.randomizationRanges.material_randomization.enabled = False  
+        cfg.task.env.randomizationRanges.randomizeGravity = False
+        cfg.task.env.randomizationRanges.randomizeFriction = False
+        cfg.task.env.randomizationRanges.randomizeCOM = False
+        cfg.task.env.randomizationRanges.randomizeAddedMass = False
+        cfg.task.env.randomizationRanges.randomizeMotorStrength = False
+        cfg.task.env.randomizationRanges.randomizeMotorOffset = False
+        cfg.task.env.randomizationRanges.randomizeKpFactor = False
+        cfg.task.env.randomizationRanges.randomizeKdFactor = False
+        cfg.task.env.randomizationRanges.material_randomization.enabled = False  
         # Add any other overrides you need.
 
 
@@ -234,8 +234,6 @@ def parse_hydra_configs(cfg: DictConfig):
     rlg_trainer.launch_rlg_hydra()
     rlg_trainer.run(env, module_path, experiment_dir)
     env.close()
-
-
 
     if cfg.wandb_activate and global_rank == 0:
         wandb.finish()
