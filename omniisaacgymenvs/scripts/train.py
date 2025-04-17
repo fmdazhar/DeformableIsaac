@@ -129,7 +129,6 @@ class RLGTrainer:
                         step_counter += 1
                 else:
                     env.world.step(render=not self.cfg.headless)
-            env.reset()
         env.simulation_app.close()
 
 @hydra.main(version_base=None, config_name="config", config_path="../cfg")
@@ -236,8 +235,11 @@ def parse_hydra_configs(cfg: DictConfig):
     rlg_trainer.run(env, module_path, experiment_dir)
     env.close()
 
+
+
     if cfg.wandb_activate and global_rank == 0:
         wandb.finish()
+    
 
 
 if __name__ == "__main__":

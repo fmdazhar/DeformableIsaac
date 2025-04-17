@@ -42,7 +42,7 @@ class VecEnv(VecEnvBase):
             self._priv_obs = self._priv_obs.to(self._task.rl_device)
         self._rew = self._rew.to(self._task.rl_device)
         self._resets = self._resets.to(self._task.rl_device)
-        self._extras = self._extras.to(self._task.rl_device)
+        self._extras = self._extras
 
     def set_task(self, task, backend="numpy", sim_params=None, init_sim=True, rendering_dt=1.0 / 60.0) -> None:
         super().set_task(task, backend, sim_params, init_sim, rendering_dt)
@@ -50,6 +50,7 @@ class VecEnv(VecEnvBase):
         self.num_states = self._task.num_states
         self.state_space = self._task.state_space
         self.num_obs = self._task._num_observations
+        self.num_height_points = self._task._num_height_points
         self.num_privileged_obs = self._task._num_privileged_observations
         self.num_proprio = self._task._num_proprio
         self.num_priv = self._task._num_priv

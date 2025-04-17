@@ -3,10 +3,10 @@ name: AnymalTerrain
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:8,${...num_envs}}
+  numEnvs: ${resolve_default:4,${...num_envs}}
 
   terrain:
-    measureHeights: False
+    measureHeights: True
     staticFriction: 1.0 # [-]
     dynamicFriction: 1.0 # [-]
     restitution: 0. # [-]
@@ -38,60 +38,60 @@ env:
         particle_present: False
         count: 5
         level: 1
-      - name: rough
-        compliant: True
-        particle_present: False
-        count: 5
-        level: 1
+      # - name: rough
+      #   compliant: True
+      #   particle_present: False
+      #   count: 5
+      #   level: 1
 
-      - name: flat
-        compliant: True
-        particle_present: False
-        count: 1
-      - name: flat
-        compliant: True
-        particle_present: False
-        count: 1
+      # - name: flat
+      #   compliant: True
+      #   particle_present: False
+      #   count: 1
+      # - name: flat
+      #   compliant: True
+      #   particle_present: False
+      #   count: 1
 
-      - name: central_depression_terrain
-        compliant: True
-        count: 2
-        level: 0
-        particle_present: True
-        system: 1
-        depth: 0.13
-        size: 4           # Length of the terrain grid (number of points)
-      - name: central_depression_terrain
-        compliant: True
-        count: 1
-        level: 1
-        particle_present: True
-        system: 1
-        depth: 0.1
-        size: 3           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 2
+      #   level: 0
+      #   particle_present: True
+      #   system: 1
+      #   depth: 0.13
+      #   size: 4           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 1
+      #   level: 1
+      #   particle_present: True
+      #   system: 1
+      #   depth: 0.1
+      #   size: 3           # Length of the terrain grid (number of points)
 
-      - name: central_depression_terrain
-        compliant: True
-        count: 1
-        level: 1
-        particle_present: True
-        particle_params:
-        system: 3
-        depth: 0.1
-        size: 3           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 1
+      #   level: 1
+      #   particle_present: True
+      #   particle_params:
+      #   system: 3
+      #   depth: 0.1
+      #   size: 3           # Length of the terrain grid (number of points)
 
-      - name: central_depression_terrain
-        compliant: True
-        particle_present: True
-        system: 2
-        depth: 0.05
-        size: 3
-      - name: central_depression_terrain
-        compliant: True
-        particle_present: True
-        system: 2
-        depth: 0.1
-        size: 3           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   particle_present: True
+      #   system: 2
+      #   depth: 0.05
+      #   size: 3
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   particle_present: True
+      #   system: 2
+      #   depth: 0.1
+      #   size: 3           # Length of the terrain grid (number of points)
 
   particles:
     enabled: False
@@ -350,7 +350,7 @@ sim:
   gravity: [0.0, 0.0, -9.81]
   add_ground_plane: False
   add_distant_light: True
-  use_fabric: True
+  use_fabric: False
   enable_scene_query_support: False
   disable_contact_processing: True
 

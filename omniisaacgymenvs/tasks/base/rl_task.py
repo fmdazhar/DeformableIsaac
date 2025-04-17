@@ -140,7 +140,7 @@ class RLTask(RLTaskInterface):
             self.privileged_obs_buf = torch.zeros(self._num_envs, self.num_privileged_observations, device=self._device, dtype=torch.float)
         else: 
             self.privileged_obs_buf = None
-        self.obs_history_buf = torch.zeros(self._num_envs, self._obs_history_length, self._num_proprio, device=self.device, dtype=torch.float)
+        self.obs_history_buf = torch.zeros(self._num_envs, self._obs_history_length, self._num_proprio + self._num_height_points, device=self.device, dtype=torch.float)
         self.states_buf = torch.zeros((self._num_envs, self.num_states), device=self._device, dtype=torch.float)
         self.rew_buf = torch.zeros(self._num_envs, device=self._device, dtype=torch.float)
         self.reset_buf = torch.ones(self._num_envs, device=self._device, dtype=torch.long)

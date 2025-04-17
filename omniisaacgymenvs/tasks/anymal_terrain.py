@@ -63,18 +63,19 @@ class AnymalTerrainTask(RLTask):
         self._num_privileged_observations = None
         # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
-        self._num_obs_history = self._obs_history_length * self._num_proprio
         # If measure_heights is True, we add that to the final observation dimension
         if self.measure_heights:
-            self.num_height_points = 36 #140
+            self._num_height_points = 9 #140
         else:
-            self.num_height_points = 0
+            self._num_height_points = 0
+        self._num_obs_history = self._obs_history_length * (self._num_proprio + self._num_height_points)
+
 
         # Then the final observation dimension is:
-        self._num_observations = (self._obs_history_length * (self._num_proprio + self.num_height_points)) \
+        self._num_observations = self._num_obs_history \
                                 + self._num_priv \
                                 + self._num_proprio \
-                                + self.num_height_points
+                                + self._num_height_points
 
         RLTask.__init__(self, name, env)
 
@@ -83,7 +84,7 @@ class AnymalTerrainTask(RLTask):
         if self.measure_heights:
             self.height_points = self.init_height_points()
         self.measured_heights = None
-        self.debug_heights = False
+        self.debug_heights = True
 
         # Initialize dictionaries to track created particle systems and materials
         self.created_particle_systems = {}
@@ -226,6 +227,7 @@ class AnymalTerrainTask(RLTask):
 
 
         self._num_priv = 28 + (2 if self._compliance_active else 0) + particle_bonus
+        print(f"Num priv: {self._num_priv}")
     
     def _get_noise_scale_vec(self, cfg):
 
@@ -245,17 +247,18 @@ class AnymalTerrainTask(RLTask):
         
 
     def init_height_points(self):
-        # 1mx1.6m rectangle (without center line)
+        
         y = 0.1 * torch.tensor(
             [-1, 0, 1], device=self.device, requires_grad=False
-        )  # 10-50cm on each side
+        )  
         x = 0.1 * torch.tensor(
             [-1, 0, 1], device=self.device, requires_grad=False
-        )  # 20-80cm on each side
+        )  
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
 
-        self.num_height_points = grid_x.numel()
-        points = torch.zeros(self.num_envs, self.num_height_points, 3, device=self.device, requires_grad=False)
+        self._num_height_points = grid_x.numel()
+        print(f"Num height points: {self._num_height_points}")
+        points = torch.zeros(self.num_envs, self._num_height_points, 3, device=self.device, requires_grad=False)
         points[:, :, 0] = grid_x.flatten()
         points[:, :, 1] = grid_y.flatten()
         return points
@@ -790,7 +793,7 @@ class AnymalTerrainTask(RLTask):
         self.damping_scale, self.damping_shift = self.get_scale_shift(self.damping_range)
 
         self.gravity_scale, self.gravity_shift = self.get_scale_shift(self.gravity_range)
-        self.pbd_scale, self.pbd_shift = self.get_scale_shift(self.pbd_range)
+        # self.pbd_scale, self.pbd_shift = self.get_scale_shift(self.pbd_range)
 
         self.default_base_masses = self._anymals._base.get_masses().clone()
         self.default_inertias = self._anymals._base.get_inertias().clone()
@@ -1071,29 +1074,29 @@ class AnymalTerrainTask(RLTask):
         self.reset_buf = self.has_fallen.clone()
         self.reset_buf = torch.where(self.timeout_buf.bool(), torch.ones_like(self.reset_buf), self.reset_buf)
         
-        # Convert each robot's base (x,y) position into heightfield indices
-        hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
-        hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
-        # Define a small distance buffer (in index units) for early reset
-        buffer = 0.5  # adjust this value based on your setup
-        # Check if the robot is outside the "safe" bounds with the buffer:
-        out_of_bounds = (
-            (hf_x < self.bx_start + buffer) |
-            (hf_x > self.bx_end - buffer)  |
-            (hf_y < self.by_start + buffer) |
-            (hf_y > self.by_end - buffer)
-        )
+        # # Convert each robot's base (x,y) position into heightfield indices
+        # hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
+        # hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
+        # # Define a small distance buffer for early reset
+        # buffer = 0.0  # adjust this value based on your setup
+        # # Check if the robot is outside the "safe" bounds with the buffer:
+        # out_of_bounds = (
+        #     (hf_x < self.bx_start + buffer) |
+        #     (hf_x > self.bx_end - buffer)  |
+        #     (hf_y < self.by_start + buffer) |
+        #     (hf_y > self.by_end - buffer)
+        # )
 
-        # Instead of marking them to reset, teleport them back to spawn:
-        teleport_env_ids = out_of_bounds.nonzero(as_tuple=False).flatten()
-        if teleport_env_ids.numel() > 0:
-            self.base_pos[teleport_env_ids] = self.base_init_state[0:3]
-            self.base_pos[teleport_env_ids, 0:3] += self.env_origins[teleport_env_ids]
-            self.base_pos[teleport_env_ids, 0:2] += torch_rand_float(-1., 1., (len(teleport_env_ids), 2), device=self.device)
-            indices = teleport_env_ids.to(dtype=torch.int32)
-            self._anymals.set_world_poses(
-            positions=self.base_pos[teleport_env_ids].clone(), orientations=self.base_quat[teleport_env_ids].clone(), indices=indices
-        )
+        # # Instead of marking them to reset, teleport them back to spawn:
+        # teleport_env_ids = out_of_bounds.nonzero(as_tuple=False).flatten()
+        # if teleport_env_ids.numel() > 0:
+        #     self.base_pos[teleport_env_ids] = self.base_init_state[0:3]
+        #     self.base_pos[teleport_env_ids, 0:3] += self.env_origins[teleport_env_ids]
+        #     self.base_pos[teleport_env_ids, 0:2] += torch_rand_float(-1., 1., (len(teleport_env_ids), 2), device=self.device)
+        #     indices = teleport_env_ids.to(dtype=torch.int32)
+        #     self._anymals.set_world_poses(
+        #     positions=self.base_pos[teleport_env_ids].clone(), orientations=self.base_quat[teleport_env_ids].clone(), indices=indices
+        # )
             
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, which will be called to compute the total reward.
@@ -1179,11 +1182,11 @@ class AnymalTerrainTask(RLTask):
 
         # 3) If measuring heights, compute them and concatenate AFTER the proprio block.
         if self.measure_heights:
-            self.measured_heights = self.get_heights()
+            self.measured_heights = self.get_heights_below_foot()
             if self.debug_heights:
                 # self._visualize_terrain_heights() 
                 # self._visualize_depression_indices()
-                self.query_top_particle_positions(0)
+                # self.query_top_particle_positions(0)
                 self._visualize_height_scans()
 
             heights = torch.clip(
@@ -1219,17 +1222,18 @@ class AnymalTerrainTask(RLTask):
         ], dim=-1)
 
         # 6) Update the obs_history buffer:
-        self.obs_history_buf[:, :-1] = self.obs_history_buf[:, 1:].clone()
-        self.obs_history_buf[:, -1] = self.obs_buf
+        proprio_to_store = final_obs_no_history      # (N, 52  [+36 if heights])
 
         self.obs_history_buf = torch.where(
-            (self.progress_buf <= 1)[:, None, None], 
-            torch.stack([self.obs_buf] * self._obs_history_length, dim=1),
+            (self.progress_buf <= 1)[:, None, None],                     # On (re)reset
+            torch.stack([final_obs_no_history] * self._obs_history_length,   # fill history
+                        dim=1),
             torch.cat([
-                self.obs_history_buf[:, 1:],
-                self.obs_buf.unsqueeze(1)
+                self.obs_history_buf[:, 1:],           # drop oldest frame
+                final_obs_no_history.unsqueeze(1)          # append newest
             ], dim=1)
-        )     
+        )
+   
 
     def get_ground_heights_below_base(self):
         points = self.base_pos.reshape(self.num_envs, 1, 3)
@@ -1272,10 +1276,10 @@ class AnymalTerrainTask(RLTask):
     def get_heights(self, env_ids=None):
         if env_ids:
             points = quat_apply_yaw(
-                self.base_quat[env_ids].repeat(1, self.num_height_points), self.height_points[env_ids]
+                self.base_quat[env_ids].repeat(1, self._num_height_points), self.height_points[env_ids]
             ) + (self.base_pos[env_ids, 0:3]).unsqueeze(1)
         else:
-            points = quat_apply_yaw(self.base_quat.repeat(1, self.num_height_points), self.height_points) + (
+            points = quat_apply_yaw(self.base_quat.repeat(1, self._num_height_points), self.height_points) + (
                 self.base_pos[:, 0:3]
             ).unsqueeze(1)
 
@@ -2018,7 +2022,9 @@ class AnymalTerrainTask(RLTask):
         positions = []
         proto_indices = []
 
-        points = quat_apply_yaw(self.base_quat.repeat(1, self.num_height_points), self.height_points) + (
+        # foot_positions = self.foot_pos.view(self.num_envs, 4, 3)
+        # points = foot_positions.unsqueeze(2) + self.height_points.unsqueeze(1)
+        points = quat_apply_yaw(self.base_quat.repeat(1, self._num_height_points), self.height_points) + (
             self.base_pos[:, 0:3]
         ).unsqueeze(1)
         points += self.terrain.border_size
@@ -2027,7 +2033,7 @@ class AnymalTerrainTask(RLTask):
         py = points[:, :, 1].view(-1)
         px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
         py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
-        num_points = self.num_envs * self.num_height_points
+        num_points = self.num_envs * self._num_height_points
         
         for idx in range(num_points):
             # Compute world x and y from grid indices
