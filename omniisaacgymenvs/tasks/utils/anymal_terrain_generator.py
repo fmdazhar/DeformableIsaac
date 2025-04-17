@@ -98,7 +98,6 @@ class Terrain:
 
         # All possible terrain type definitions from config:
         terrain_type_list = self.cfg["terrain_types"]  # e.g. a list of dicts
-        n_terrain_types = len(terrain_type_list)
 
         for i, terrain_type_info in enumerate(terrain_type_list):
             name = str(terrain_type_info["name"])

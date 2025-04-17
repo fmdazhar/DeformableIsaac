@@ -84,7 +84,7 @@ class A1(Robot):
 
         # self.foot_force = np.zeros(4)
         # self.enable_foot_filter = True
-        self._cs = _sensor.acquire_contact_sensor_interface()
+        # self._cs = _sensor.acquire_contact_sensor_interface()
 
         # Initialize the Robot base class
         super().__init__(

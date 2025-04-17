@@ -59,19 +59,19 @@ class AnymalTerrainTask(RLTask):
         self.update_config(sim_config)
 
         self._num_actions = 12
-        self._num_proprio = 48 #188 #3 + 3 + 3 + 3 + 12 + 12 + 140 + 12
+        self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4 
         self._num_privileged_observations = None
-        self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
+        # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
         self._num_obs_history = self._obs_history_length * self._num_proprio
         # If measure_heights is True, we add that to the final observation dimension
         if self.measure_heights:
-            self.num_height_points = 140
+            self.num_height_points = 36 #140
         else:
             self.num_height_points = 0
 
         # Then the final observation dimension is:
-        self._num_observations = (self._obs_history_length * self._num_proprio) \
+        self._num_observations = (self._obs_history_length * (self._num_proprio + self.num_height_points)) \
                                 + self._num_priv \
                                 + self._num_proprio \
                                 + self.num_height_points
@@ -110,6 +110,7 @@ class AnymalTerrainTask(RLTask):
         self.ang_vel_scale = self._task_cfg["env"]["learn"]["angularVelocityScale"]
         self.dof_pos_scale = self._task_cfg["env"]["learn"]["dofPositionScale"]
         self.dof_vel_scale = self._task_cfg["env"]["learn"]["dofVelocityScale"]
+        self.contact_force_scale = self._task_cfg["env"]["learn"]["contactForceScale"]
         self.height_meas_scale = self._task_cfg["env"]["learn"]["heightMeasurementScale"]
         self.action_scale = self._task_cfg["env"]["control"]["actionScale"]
 
@@ -154,7 +155,12 @@ class AnymalTerrainTask(RLTask):
         self.Kp_factor_range = self._task_cfg["env"]["randomizationRanges"]["KpFactorRange"]
         self.Kd_factor_range = self._task_cfg["env"]["randomizationRanges"]["KdFactorRange"]
         self.gravity_range = self._task_cfg["env"]["randomizationRanges"]["gravityRange"]
-
+        self.stiffness_range = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["compliance"]["stiffness"]
+        self.damping_multiplier_range = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["compliance"]["damping_multiplier"]
+        # Calculate the damping range:
+        damping_min = self.stiffness_range[0] * self.damping_multiplier_range[0]
+        damping_max = self.stiffness_range[1] * self.damping_multiplier_range[1]
+        self.damping_range = (damping_min, damping_max)
         # other
         self.decimation = self._task_cfg["env"]["control"]["decimation"]
         self.dt = self.decimation * self._task_cfg["sim"]["dt"]
@@ -184,11 +190,43 @@ class AnymalTerrainTask(RLTask):
         ]
 
         self._task_cfg["sim"]["add_ground_plane"] = False
-        self._particle_cfg = self._task_cfg["env"]["particles"]
-        terrain_types = self._task_cfg["env"]["terrain"].get("terrain_types", [])
-        has_particles = any(tt.get("particle_present", False) for tt in terrain_types)
-        self._particles_active = has_particles and self._particle_cfg.get("enabled", False) and not self.curriculum
 
+        self._particle_cfg = self._task_cfg["env"]["particles"]
+        terrain_types = self._task_cfg["env"]["terrain"].get("terrain_types", [])   
+        self._particles_active = any(tt.get("particle_present", False) for tt in terrain_types) \
+                             and self._particle_cfg.get("enabled", False) and self.curriculum
+        
+        self._compliance_active = any(tt.get("compliant", False) for tt in terrain_types)
+        
+        if self._particle_cfg.get("enabled", False):
+            active_systems = set(
+                f"system{tt.get('system')}"
+                for tt in terrain_types
+                if tt.get("particle_present", False) and tt.get("system") is not None
+            )
+        else:
+            active_systems = set()
+        self._fluid_active = any(
+            self._task_cfg["env"]["particles"].get(system, {}).get("particle_grid_fluid", False)
+            for system in active_systems
+        )
+        self._nonfluid_active = any(
+            not self._particle_cfg[sys].get("particle_grid_fluid", False)
+            for sys in active_systems
+        )
+
+        if self._particles_active:
+            particle_bonus = 3
+            if self._fluid_active:
+                particle_bonus += 6
+            if self._nonfluid_active:
+                particle_bonus += 4
+        else:
+            particle_bonus = 0
+
+
+        self._num_priv = 28 + (2 if self._compliance_active else 0) + particle_bonus
+    
     def _get_noise_scale_vec(self, cfg):
 
         noise_vec = torch.zeros(self._num_proprio, device=self.device, dtype=torch.float)
@@ -200,18 +238,19 @@ class AnymalTerrainTask(RLTask):
         noise_vec[9:12] = 0.0  # commands
         noise_vec[12:24] = self._task_cfg["env"]["learn"]["dofPositionNoise"] * noise_level * self.dof_pos_scale
         noise_vec[24:36] = self._task_cfg["env"]["learn"]["dofVelocityNoise"] * noise_level * self.dof_vel_scale
-        noise_vec[36:48] = 0.0  # previous actions
+        noise_vec[36:40] = self._task_cfg["env"]["learn"]["contactForceNoise"] * noise_level * self.contact_force_scale
+        noise_vec[40:52] = 0.0  # previous actions
+
         return noise_vec
         
-
 
     def init_height_points(self):
         # 1mx1.6m rectangle (without center line)
         y = 0.1 * torch.tensor(
-            [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5], device=self.device, requires_grad=False
+            [-1, 0, 1], device=self.device, requires_grad=False
         )  # 10-50cm on each side
         x = 0.1 * torch.tensor(
-            [-8, -7, -6, -5, -4, -3, -2, 2, 3, 4, 5, 6, 7, 8], device=self.device, requires_grad=False
+            [-1, 0, 1], device=self.device, requires_grad=False
         )  # 20-80cm on each side
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
 
@@ -224,10 +263,10 @@ class AnymalTerrainTask(RLTask):
     def init_particle_height_points(self):
         # 1mx1.6m rectangle (without center line)
         y = 0.1 * torch.tensor(
-            [-7,-6,-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7], device=self.device, requires_grad=False
+            [-2, -1, 0, 1, 2], device=self.device, requires_grad=False
         )  # 10-50cm on each side
         x = 0.1 * torch.tensor(
-            [-10,-9,-8, -7, -6, -5, -4, -3, -2,-1, 0, 1 , 2, 3, 4, 5, 6, 7, 8, 9, 10], device=self.device, requires_grad=False
+            [ -2, -1, 0, 1 , 2], device=self.device, requires_grad=False
         )  # 20-80cm on each side
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
 
@@ -373,8 +412,6 @@ class AnymalTerrainTask(RLTask):
             self.Kd_factors[env_ids, :] = torch.rand(len(env_ids), dtype=torch.float, device=self.device,
                                                      requires_grad=False).unsqueeze(1) * (
                                                   self.Kd_factor_range[1] - self.Kd_factor_range[0]) + self.Kd_factor_range[0]
-
-    
     
     def _randomize_gravity(self):
         if self._task_cfg["env"]["randomizationRanges"]["randomizeGravity"]:
@@ -472,50 +509,67 @@ class AnymalTerrainTask(RLTask):
 
 
     def set_compliance(self, env_ids=None, device="cpu"):
-        # If no env_ids are provided, do nothing.
+        """
+        Sets compliant-contact stiffness and damping for each env in `env_ids`.
+        - If `self.compliance[env]` is True, the values are sampled from the given self.stiffness_range.
+        - If `self.compliance[env]` is False, both stiffness and damping are set to zero.
+        """
+
+        # If no env_ids are provided, operate on all environments
         if env_ids is None:
-            env_ids = torch.nonzero(self.compliance, as_tuple=False).flatten()
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            env_ids = env_ids.to(self.device)
 
         if len(env_ids) == 0:
             return
-        # Ensure env_ids is on the correct device.
-        env_ids = env_ids.to(device)
 
-        # Retrieve deformation bounds from the configuration.
-        # For example, from: self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["compliance"]["deformation"]
-        deformation_bounds = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["compliance"]["deformation"]
-        deformation_low, deformation_high = deformation_bounds[0], deformation_bounds[1]
+        # Separate env_ids by compliance flag
+        compliance_true_ids = env_ids[self.compliance[env_ids]]
+        compliance_false_ids = env_ids[~self.compliance[env_ids]]
 
-        # Sample a deflection value for each environment in env_ids.
-        num_envs = len(env_ids)
-        deformations = torch.rand(num_envs, device=device) * (deformation_high - deformation_low) + deformation_low
+        # For compliant envs, sample random stiffness/damping from the config ranges
+        if len(compliance_true_ids) > 0:
+            num_compliant = len(compliance_true_ids)
+            # Sample stiffness
+            stiffness_values = torch.rand(num_compliant, device=self.device) \
+                * (self.stiffness_range[1] - self.stiffness_range[0]) + self.stiffness_range[0]
 
-        # Compute stiffness and damping per environment.
-        stiffness_values = (self.total_masses[env_ids] * 9.81) / deformations
-        damping_values = 0.1 * stiffness_values
+            # Sample damping as a random multiplier of stiffness
+            damping_mult_values = torch.rand(num_compliant, device=self.device) \
+                * (self.damping_multiplier_range[1] - self.damping_multiplier_range[0]) \
+                + self.damping_multiplier_range[0]
+            damping_values = stiffness_values * damping_mult_values
 
-        # Initialize (or update) the compliance tensors.
-        self.stiffness[env_ids, 0] = stiffness_values.to(self.device)
-        self.damping[env_ids, 0] = damping_values.to(self.device)
-        # print(f"Stiffness set to: {self.stiffness[env_ids]}")
-        # print(f"Damping set to: {self.damping[env_ids]}")
+            self.stiffness[compliance_true_ids, 0] = stiffness_values
+            self.damping[compliance_true_ids, 0] = damping_values
 
-        # Collect prim references (once)
-        _prim_paths = find_matching_prim_paths(self._anymals._foot_material_path)
-        self._prims = [get_prim_at_path(path) for path in _prim_paths]
-        self._material_apis = [None] * self._num_envs
+        # For non-compliant envs, set both stiffness and damping to zero
+        if len(compliance_false_ids) > 0:
+            self.stiffness[compliance_false_ids, 0] = 0.0
+            self.damping[compliance_false_ids, 0] = 0.0
 
-        # Ensure we have PhysxMaterialAPI for each environment exactly once.
-        for i in range(self._num_envs):
+        # ----------------------------------------------------------------
+        # Initialize or update the PhysxMaterialAPI pointers once if needed
+        # ----------------------------------------------------------------
+        if not hasattr(self, "_material_apis") or self._material_apis is None:
+            _prim_paths = find_matching_prim_paths(self._anymals._foot_material_path)
+            self._prims = [get_prim_at_path(path) for path in _prim_paths]
+            self._material_apis = [None] * self._num_envs
+
+        # Ensure each environment’s material API is created/applied once
+        for i in env_ids:
+            i = int(i)  # make sure index is an int for Python indexing
             if self._material_apis[i] is None:
                 if self._prims[i].HasAPI(PhysxSchema.PhysxMaterialAPI):
                     self._material_apis[i] = PhysxSchema.PhysxMaterialAPI(self._prims[i])
                 else:
                     self._material_apis[i] = PhysxSchema.PhysxMaterialAPI.Apply(self._prims[i])
-            # Set the compliance values for the material.
+
+            # Apply updated stiffness/damping to the material
             self._material_apis[i].CreateCompliantContactStiffnessAttr().Set(float(self.stiffness[i, 0]))
             self._material_apis[i].CreateCompliantContactDampingAttr().Set(float(self.damping[i, 0]))
-
+       
     def store_pbd_params(self):
         """
         Populates self.pbd_parameters for each env that has a non-zero system_idx.
@@ -544,36 +598,18 @@ class AnymalTerrainTask(RLTask):
             # Pull out the relevant PBD parameters from the config
             # (Adjust the defaults and parameter names to match your usage)
             mat_cfg = self._particle_cfg[system_str]
-            friction         = mat_cfg.get("pbd_material_friction", 0.0)
-            particle_friction_scale   = mat_cfg.get("pbd_material_particle_friction_scale", 0.0)
-            adhesion          = mat_cfg.get("pbd_material_adhesion", 0.0)
-            particle_adhesion_scale  = mat_cfg.get("pbd_material_particle_adhesion_scale", 0.0)
-            damping          = mat_cfg.get("pbd_material_damping", 0.0)
-            density         = mat_cfg.get("pbd_material_density", 0.0)
 
             # Find which environments belong to this system
             env_ids = torch.nonzero(self.system_idx == sid, as_tuple=True)[0]
 
-            # Write the parameters into self.pbd_parameters for these envs
-            self.pbd_parameters[env_ids, 0] = friction
-            self.pbd_parameters[env_ids, 1] = particle_friction_scale
-            self.pbd_parameters[env_ids, 2] = adhesion
-            self.pbd_parameters[env_ids, 3] = particle_adhesion_scale
-            self.pbd_parameters[env_ids, 4] = damping
-            self.pbd_parameters[env_ids, 5] = density
+            # Fill every column dynamically
+            for col, key in enumerate(self.pbd_param_names):
+                self.pbd_parameters[env_ids, col] = mat_cfg.get(key, 0.0)
+
 
     def randomize_pbd_material(self):
         """
         Retrieves an existing PBD material via PhysxSchema and updates its parameters using randomization.
-        
-        Args:
-            system_name: A string (e.g. "system1") identifying the system.
-            config: A dict of fixed values and optional range keys. For example:
-                {
-                    "pbd_material_friction": 0.8,
-                    "pbd_material_friction_range": [0.5, 1.0],
-                    ...
-                }
         """
         # Get the particles material randomization config from randomizationRanges.
         mat_rand_cfg = self._task_cfg["env"]["randomizationRanges"].get("material_randomization", {})
@@ -583,88 +619,66 @@ class AnymalTerrainTask(RLTask):
 
         particles_rand_cfg = mat_rand_cfg.get("particles", {}).get("systems", {})
 
+        # Define parameters with their corresponding attribute suffixes once.
+        param_to_attr = {
+            "pbd_material_friction": "FrictionAttr",
+            "pbd_material_density": "DensityAttr",
+            "pbd_material_damping": "DampingAttr",
+            "pbd_material_particle_friction_scale": "ParticleFrictionScaleAttr",
+            "pbd_material_adhesion": "AdhesionAttr",
+            "pbd_material_particle_adhesion_scale": "ParticleAdhesionScaleAttr",
+            "pbd_material_adhesion_offset_scale": "AdhesionOffsetScaleAttr",
+            "pbd_material_viscosity": "ViscosityAttr",
+            "pbd_material_surface_tension": "SurfaceTensionAttr",
+            "pbd_material_cohesion": "CohesionAttr",
+            "pbd_material_lift": "LiftAttr",
+            "pbd_material_drag": "DragAttr",
+            "pbd_material_cfl_coefficient": "CflCoefficientAttr",
+        }
+
+        def sample_param(param_name, config):
+            # Check for a range key in the config.
+            range_key = f"{param_name}_range"
+            if range_key not in config:
+                raise ValueError(f"Range key '{range_key}' not found in configuration for material randomization.")
+            low, high = config[range_key]
+            return random.uniform(low, high)
+
+        # Process each system in the configuration.
         for system_name, config in particles_rand_cfg.items():
+            # Skip this system if randomization is disabled.
             if not config.get("enabled", False):
-                # System Material randomization is disabled.
-                return
+                continue
+
             material_key = f"pbd_material_{system_name}"
-            # Check if the material has been created already.
-            if material_key in self.created_materials:
-                # Randomize the material parameters for this system.
-                pbd_material_path = f"/World/pbdmaterial_{system_name}"
-                material_api = PhysxSchema.PhysxPBDMaterialAPI.Get(self._stage, pbd_material_path)
-                if not material_api:
-                    print(f"[ERROR] Could not find PBD material at {pbd_material_path}")
-                    return False
-
-                def sample_param(param_name):
-                    # If a range key is provided, sample a value between low and high.
-                    range_key = f"{param_name}_range"
-                    if range_key in config:
-                        low, high = config[range_key]
-                        return random.uniform(low, high)
-                    # Otherwise, return the fixed value from config, if provided.
-                    return config.get(param_name, None)
-
-                # List the parameters to update.
-                parameters = [
-                    "pbd_material_friction",
-                    "pbd_material_particle_friction_scale",
-                    "pbd_material_damping",
-                    "pbd_material_viscosity",
-                    "pbd_material_vorticity_confinement",
-                    "pbd_material_surface_tension",
-                    "pbd_material_cohesion",
-                    "pbd_material_adhesion",
-                    "pbd_material_particle_adhesion_scale",
-                    "pbd_material_adhesion_offset_scale",
-                    "pbd_material_gravity_scale",
-                    "pbd_material_lift",
-                    "pbd_material_drag",
-                    "pbd_material_density",
-                    "pbd_material_cfl_coefficient",
-                ]
-
-                for param in parameters:
-                    value = sample_param(param)
-                    if value is not None:
-                        if param == "pbd_material_friction":
-                            material_api.CreateFrictionAttr().Set(value)
-                        elif param == "pbd_material_particle_friction_scale":
-                            material_api.CreateParticleFrictionScaleAttr().Set(value)
-                        elif param == "pbd_material_damping":
-                            material_api.CreateDampingAttr().Set(value)
-                        elif param == "pbd_material_viscosity":
-                            material_api.CreateViscosityAttr().Set(value)
-                        elif param == "pbd_material_vorticity_confinement":
-                            material_api.CreateVorticityConfinementAttr().Set(value)
-                        elif param == "pbd_material_surface_tension":
-                            material_api.CreateSurfaceTensionAttr().Set(value)
-                        elif param == "pbd_material_cohesion":
-                            material_api.CreateCohesionAttr().Set(value)
-                        elif param == "pbd_material_adhesion":
-                            material_api.CreateAdhesionAttr().Set(value)
-                        elif param == "pbd_material_particle_adhesion_scale":
-                            material_api.CreateParticleAdhesionScaleAttr().Set(value)
-                        elif param == "pbd_material_adhesion_offset_scale":
-                            material_api.CreateAdhesionOffsetScaleAttr().Set(value)
-                        elif param == "pbd_material_gravity_scale":
-                            material_api.CreateGravityScaleAttr().Set(value)
-                        elif param == "pbd_material_lift":
-                            material_api.CreateLiftAttr().Set(value)
-                        elif param == "pbd_material_drag":
-                            material_api.CreateDragAttr().Set(value)
-                        elif param == "pbd_material_density":
-                            material_api.CreateDensityAttr().Set(value)
-                        elif param == "pbd_material_cfl_coefficient":
-                            material_api.CreateCflCoefficientAttr().Set(value)
-                
-                print(f"[INFO] Updated PBD material at {pbd_material_path} with randomized parameters.")
-                
-            else:
+            if material_key not in self.created_materials:
                 print(f"[WARN] Material {material_key} not found; skipping randomization.")
+                continue
 
+            # Get the material API.
+            pbd_material_path = f"/World/pbdmaterial_{system_name}"
+            material_api = PhysxSchema.PhysxPBDMaterialAPI.Get(self._stage, pbd_material_path)
+            if not material_api:
+                print(f"[ERROR] Could not find PBD material at {pbd_material_path}")
+                continue
 
+            # Pre-sample all parameters once for this system.
+            sampled_values = {}
+            for param in param_to_attr.keys():
+                sampled_values[param] = sample_param(param, config)
+
+            # Iterate over parameters and update if the attribute exists.
+            for p, suffix in param_to_attr.items():
+                # always call GetXAttr()
+                getter = getattr(material_api, f"Get{suffix}")
+                attr   = getter()
+                # only set if the attribute actually exists on this material
+                if attr and attr.Get() is not None:
+                    attr.Set(sampled_values[p])
+                    self._particle_cfg[f"system{system_name}"][p] = sampled_values[p]
+
+            print(f"[INFO] Updated PBD material at {pbd_material_path} with randomized parameters.")
+            
     def post_reset(self):
         self.base_init_state = torch.tensor(
             self.base_init_state, dtype=torch.float, device=self.device, requires_grad=False
@@ -732,8 +746,8 @@ class AnymalTerrainTask(RLTask):
         self.base_quat = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
         self.base_velocities = torch.zeros((self.num_envs, 6), dtype=torch.float, device=self.device)
 
-        self.thigh_pos = torch.zeros((self.num_envs * 4, 3), dtype=torch.float, device=self.device)
-        self.thigh_quat = torch.zeros((self.num_envs * 4, 4), dtype=torch.float, device=self.device)
+        self.foot_pos = torch.zeros((self.num_envs * 4, 3), dtype=torch.float, device=self.device)
+        self.ground_heights_below_foot = torch.zeros((self.num_envs * 4), dtype=torch.float, device=self.device)
         
         self.thigh_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
         self.calf_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
@@ -767,7 +781,17 @@ class AnymalTerrainTask(RLTask):
         self.payload_scale, self.payload_shift = self.get_scale_shift(self.added_mass_range)
         self.com_scale, self.com_shift = self.get_scale_shift(self.com_displacement_range)
         self.motor_strength_scale, self.motor_strength_shift = self.get_scale_shift(self.motor_strength_range)
-        
+        self.motor_offset_scale, self.motor_offset_shift = self.get_scale_shift(self.motor_offset_range)
+        self.Kp_factor_scale, self.Kp_factor_shift = self.get_scale_shift(self.Kp_factor_range)
+        self.Kd_factor_scale, self.Kd_factor_shift = self.get_scale_shift(self.Kd_factor_range)
+        self.stiffness_scale, self.stiffness_shift = self.get_scale_shift(self.stiffness_range)
+
+
+        self.damping_scale, self.damping_shift = self.get_scale_shift(self.damping_range)
+
+        self.gravity_scale, self.gravity_shift = self.get_scale_shift(self.gravity_range)
+        self.pbd_scale, self.pbd_shift = self.get_scale_shift(self.pbd_range)
+
         self.default_base_masses = self._anymals._base.get_masses().clone()
         self.default_inertias = self._anymals._base.get_inertias().clone()
         # self.default_materials = self._anymals._foot._physics_view.get_material_properties().to(self.device)
@@ -873,12 +897,12 @@ class AnymalTerrainTask(RLTask):
 
 
     def update_terrain_level(self, env_ids):
-    """
-    Example version that:
-      - If we've just unlocked a new level (i.e., self.current_unlocked_level < self.highest_level),
-        then half of the env_ids go to the new level, half remain among lower levels.
-      - Once we have reached all levels unlocked, distribution among all 0..highest_level is random.
-    """
+        """
+        Example version that:
+        - If we've just unlocked a new level (i.e., self.current_unlocked_level < self.highest_level),
+            then half of the env_ids go to the new level, half remain among lower levels.
+        - Once we have reached all levels unlocked, distribution among all 0..highest_level is random.
+        """
 
         if not self.init_done:
             # Skip terrain update on the very first reset if you like, or keep minimal logic
@@ -956,7 +980,6 @@ class AnymalTerrainTask(RLTask):
 
         # Update compliance and stored PBD parameters for these newly changed envs
         self.set_compliance(env_ids)
-        self.store_pbd_params()
 
     def refresh_dof_state_tensors(self):
         self.dof_pos = self._anymals.get_joint_positions(clone=False)
@@ -965,10 +988,11 @@ class AnymalTerrainTask(RLTask):
     def refresh_body_state_tensors(self):
         self.base_pos, self.base_quat = self._anymals.get_world_poses(clone=False)
         self.base_velocities = self._anymals.get_velocities(clone=False)
-        self.thigh_pos, self.thigh_quat = self._anymals._thigh.get_world_poses(clone=False)
+        self.foot_pos, _ = self._anymals._foot.get_world_poses(clone=False)
 
     def refresh_net_contact_force_tensors(self):
-        self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
+        # self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
+        self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
         self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
         self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
         self.base_contact_forces = self._anymals._base.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 3)
@@ -1059,8 +1083,18 @@ class AnymalTerrainTask(RLTask):
             (hf_y < self.by_start + buffer) |
             (hf_y > self.by_end - buffer)
         )
-        self.reset_buf = torch.where(out_of_bounds, torch.ones_like(self.reset_buf), self.reset_buf)
 
+        # Instead of marking them to reset, teleport them back to spawn:
+        teleport_env_ids = out_of_bounds.nonzero(as_tuple=False).flatten()
+        if teleport_env_ids.numel() > 0:
+            self.base_pos[teleport_env_ids] = self.base_init_state[0:3]
+            self.base_pos[teleport_env_ids, 0:3] += self.env_origins[teleport_env_ids]
+            self.base_pos[teleport_env_ids, 0:2] += torch_rand_float(-1., 1., (len(teleport_env_ids), 2), device=self.device)
+            indices = teleport_env_ids.to(dtype=torch.int32)
+            self._anymals.set_world_poses(
+            positions=self.base_pos[teleport_env_ids].clone(), orientations=self.base_quat[teleport_env_ids].clone(), indices=indices
+        )
+            
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, which will be called to compute the total reward.
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
@@ -1076,7 +1110,7 @@ class AnymalTerrainTask(RLTask):
         self.reward_functions = []
         self.reward_names = []
         for name, scale in self.reward_scales.items():
-            if name=="termination":
+            if name=="termination" or name=="joint_tracking":
                 continue
             self.reward_names.append(name)
             name = '_reward_' + name
@@ -1105,10 +1139,20 @@ class AnymalTerrainTask(RLTask):
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
 
+        if "joint_tracking" in self.reward_scales:
+            rew = self._reward_termination() * self.reward_scales["termination"]
+            self.rew_buf += rew
+            self.episode_sums["joint_tracking"] += rew
+
     def get_scale_shift(self, rng):
         rng_tensor = torch.tensor(rng, dtype=torch.float, device=self.device)
-        scale = 2.0 / (rng_tensor[1] - rng_tensor[0])
-        shift = (rng_tensor[1] + rng_tensor[0]) / 2.0
+        # Check if the range is degenerate (both elements are the same)
+        if rng_tensor[1] == rng_tensor[0]:
+            scale = 0.0
+            shift = rng_tensor[0]  # or you could use rng_tensor[1] since they're equal
+        else:
+            scale = 2.0 / (rng_tensor[1] - rng_tensor[0])
+            shift = (rng_tensor[1] + rng_tensor[0]) / 2.0
         return scale, shift
 
     def get_observations(self):
@@ -1125,6 +1169,7 @@ class AnymalTerrainTask(RLTask):
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
             self.actions,
+            torch.norm(self.foot_contact_forces[:, self.feet_indices, :], dim=-1),
         ), dim=-1)  # this should match self._num_proprio in size
 
         # 2) Add noise (only on proprio)
@@ -1145,7 +1190,6 @@ class AnymalTerrainTask(RLTask):
                 self.base_pos[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
                 -1.0, 1.0
             ) * self._task_cfg["env"]["learn"]["heightMeasurementNoise"] * self._task_cfg["env"]["learn"]["noiseLevel"] * self.height_meas_scale
-            # No noise is added to heights:
             
             final_obs_no_history = torch.cat([proprio_obs, heights], dim=-1)
         else:
@@ -1159,6 +1203,12 @@ class AnymalTerrainTask(RLTask):
             (self.payloads.unsqueeze(1) - self.payload_shift) * self.payload_scale,
             (self.com_displacements - self.com_shift) * self.com_scale,
             (self.motor_strengths - self.motor_strength_shift) * self.motor_strength_scale,
+            # (self.motor_offsets - self.motor_offset_shift) * self.motor_offset_scale,
+            # (self.Kp_factors - self.Kp_factor_shift) * self.Kp_factor_scale,
+            # (self.Kd_factors - self.Kd_factor_shift) * self.Kd_factor_scale,
+            (self.stiffness - self.stiffness_shift) * self.stiffness_scale,
+            (self.damping - self.damping_shift) * self.damping_scale,
+            # (self.pbd_parameters - self.pbd_shift) * self.pbd_scale,
         ), dim=1)
 
         # 5) Concatenate everything: [ (proprio + maybe heights) + priv_buf + obs_history ]
@@ -1168,24 +1218,18 @@ class AnymalTerrainTask(RLTask):
             self.obs_history_buf.view(self.num_envs, -1)
         ], dim=-1)
 
-        # 6) Update the rolling history ONLY with the current proprio block:
-        # shift old frames and store the new one
+        # 6) Update the obs_history buffer:
         self.obs_history_buf[:, :-1] = self.obs_history_buf[:, 1:].clone()
-        self.obs_history_buf[:, -1] = proprio_obs
+        self.obs_history_buf[:, -1] = self.obs_buf
 
-    def get_ground_heights_below_knees(self):
-        points = self.knee_pos.reshape(self.num_envs, 4, 3)
-        points += self.terrain.border_size
-        points = (points / self.terrain.horizontal_scale).long()
-        px = points[:, :, 0].view(-1)
-        py = points[:, :, 1].view(-1)
-        px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
-        py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
-
-        heights1 = self.height_samples[px, py]
-        heights2 = self.height_samples[px + 1, py + 1]
-        heights = torch.min(heights1, heights2)
-        return heights.view(self.num_envs, -1) * self.terrain.vertical_scale
+        self.obs_history_buf = torch.where(
+            (self.progress_buf <= 1)[:, None, None], 
+            torch.stack([self.obs_buf] * self._obs_history_length, dim=1),
+            torch.cat([
+                self.obs_history_buf[:, 1:],
+                self.obs_buf.unsqueeze(1)
+            ], dim=1)
+        )     
 
     def get_ground_heights_below_base(self):
         points = self.base_pos.reshape(self.num_envs, 1, 3)
@@ -1201,6 +1245,30 @@ class AnymalTerrainTask(RLTask):
         heights = torch.min(heights1, heights2)
         return heights.view(self.num_envs, -1) * self.terrain.vertical_scale
 
+    def get_heights_below_foot(self, env_ids=None):
+
+        foot_positions = self.foot_pos.view(self.num_envs, 4, 3)
+        if env_ids is not None:
+            points = (foot_positions[env_ids]).unsqueeze(2) + self.height_points[env_ids].unsqueeze(1)
+        else:
+            points = foot_positions.unsqueeze(2) + self.height_points.unsqueeze(1)
+
+        points += self.terrain.border_size
+        points = (points / self.terrain.horizontal_scale).long()
+        px = points[:, :, 0].view(-1)
+        py = points[:, :, 1].view(-1)
+        px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
+        py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
+
+        heights1 = self.height_samples[px, py]
+        heights2 = self.height_samples[px+1, py]
+        heights3 = self.height_samples[px, py+1]
+        heights = torch.min(heights1, heights2)
+        heights = torch.min(heights, heights3)
+
+        return heights.view(self.num_envs, -1) * self.terrain.vertical_scale
+
+    
     def get_heights(self, env_ids=None):
         if env_ids:
             points = quat_apply_yaw(
@@ -1311,7 +1379,6 @@ class AnymalTerrainTask(RLTask):
         rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
         self.feet_air_time *= ~self.contact_filt
         return rew_airTime
-
     
     def _reward_stumble(self):
         # Penalize feet hitting vertical surfaces
@@ -1330,6 +1397,10 @@ class AnymalTerrainTask(RLTask):
         # Penalize hip motion
         return torch.sum(torch.abs(self.dof_pos[:, :4] - self.default_dof_pos[:, :4]), dim=1)
 
+    def _reward_joint_tracking(self):
+        # Penalize joint tracking
+        return torch.sum(torch.square(self.dof_pos - self.default_dof_pos), dim=1)
+
     #------------ end reward functions----------------
     
 
@@ -1346,18 +1417,44 @@ class AnymalTerrainTask(RLTask):
             system_name = f"system{system_id}"     # "system1", "system2", etc.            
             material_key = f"pbd_material_{system_name}"
             particle_system_path = f"/World/particleSystem/{system_name}"
+            contact_offset = self._particle_cfg[system_name].get("particle_system_contact_offset", None)
 
             # **Create Particle System if not already created**
             if system_name not in self.created_particle_systems:
                 if not self._stage.GetPrimAtPath(particle_system_path).IsValid():
+                    fluid = self._particle_cfg[system_name].get("particle_grid_fluid", False)
+                    particle_contact_offset = self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None)
+                    fluid_rest_offset = self._particle_cfg[system_name].get("particle_system_fluid_rest_offset", None)
+                    solid_rest_offset = self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None)
+                    rest_offset = self._particle_cfg[system_name].get("particle_system_rest_offset", None)
+
+                    # Raise an error if it is a fluid system and no particle contact offset is provided.
+                    if fluid and particle_contact_offset is None:
+                        raise ValueError("For fluid systems, 'particle_system_particle_contact_offset' must be provided.")
+
+                    if fluid:
+                        if fluid_rest_offset is None :
+                            fluid_rest_offset = 0.99 * 0.6 * particle_contact_offset
+
+                        # For example, for rest offset and solid rest offset, if they are not provided:
+                        if rest_offset is None :
+                            rest_offset = 0.99 * particle_contact_offset
+
+                        if solid_rest_offset is None :
+                            solid_rest_offset = 0.99 * particle_contact_offset
+
+                        if contact_offset is None :
+                            contact_offset = 1 * particle_contact_offset
+
                     particle_system = ParticleSystem(
                         prim_path=particle_system_path,
                         particle_system_enabled=True,
                         simulation_owner="/physicsScene",
-                        rest_offset=self._particle_cfg[system_name].get("particle_system_rest_offset", None),
-                        contact_offset=self._particle_cfg[system_name].get("particle_system_contact_offset", None),
-                        solid_rest_offset=self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None),
-                        particle_contact_offset=self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None),
+                        rest_offset=rest_offset,
+                        contact_offset=contact_offset,
+                        solid_rest_offset=solid_rest_offset,
+                        fluid_rest_offset = fluid_rest_offset, 
+                        particle_contact_offset=particle_contact_offset,
                         max_velocity=self._particle_cfg[system_name].get("particle_system_max_velocity", None),
                         max_neighborhood=self._particle_cfg[system_name].get("particle_system_max_neighborhood", None),
                         solver_position_iteration_count=self._particle_cfg[system_name].get("particle_system_solver_position_iteration_count", None),
@@ -1454,7 +1551,7 @@ class AnymalTerrainTask(RLTask):
         level = int(terrain_row[1])
         row_idx = int(terrain_row[2])
         col_idx = int(terrain_row[3])
-        depth = float(terrain_row[8]) * 2.0
+        depth = float(terrain_row[8])
         size  = float(terrain_row[9])
     
         # If your environment origins are stored separately:
@@ -1470,14 +1567,14 @@ class AnymalTerrainTask(RLTask):
 
         system_cfg = self._particle_cfg[system_name]
         solid_rest_offset = system_cfg.get("particle_system_solid_rest_offset", None)
-        particle_spacing = system_cfg.get("particle_grid_spacing", None)
+        particle_spacing_factor = system_cfg.get("particle_grid_spacing", None)
         fluid = system_cfg.get("particle_grid_fluid", None)
 
         if fluid:
             fluid_rest_offset = 0.99 * 0.6 * system_cfg.get("particle_system_particle_contact_offset", None)
-            particle_spacing = 2.5 * fluid_rest_offset
+            particle_spacing = particle_spacing_factor * fluid_rest_offset
         else:
-            particle_spacing = 2.5 * solid_rest_offset
+            particle_spacing = particle_spacing_factor * solid_rest_offset
 
         num_samples_x = int(size / particle_spacing) + 1
         num_samples_y = int(size / particle_spacing) + 1
@@ -1589,69 +1686,6 @@ class AnymalTerrainTask(RLTask):
             print(f"[INFO] Appended {len(new_positions)} Particles to {particle_point_instancer_path}")
             # Increment the total_particles counter
             self.total_particles += len(new_positions)
-
-
-    def create_particles_from_mesh(self):
-        """
-        Creates particles from the specified mesh.
-        
-        Args:
-
-        """
-        default_prim_path = "/World"
-        particle_system_path = default_prim_path + "/particleSystem"
-        particle_set_path = default_prim_path + "/particles"
-        # create a cube mesh that shall be sampled:
-        cube_mesh_path = Sdf.Path(omni.usd.get_stage_next_free_path(self._stage, "/Cube", True))
-        cube_resolution = (
-            2  # resolution can be low because we'll sample the surface / volume only irrespective of the vertex count
-        )
-        omni.kit.commands.execute(
-            "CreateMeshPrimWithDefaultXform", prim_type="Cube", u_patches=cube_resolution, v_patches=cube_resolution, select_new_prim=False
-        )        
-        cube_mesh = UsdGeom.Mesh.Get(self._stage, Sdf.Path(cube_mesh_path))
-
-        physicsUtils.setup_transform_as_scale_orient_translate(cube_mesh)
-
-        physicsUtils.set_or_add_translate_op(
-        cube_mesh, 
-        Gf.Vec3f(
-            self._particle_cfg["system1"]["particle_x_position"], 
-            self._particle_cfg["system1"]["particle_y_position"], 
-            self._particle_cfg["system1"]["particle_z_position"]
-            )
-        )
-        physicsUtils.set_or_add_scale_op(
-            cube_mesh, 
-            Gf.Vec3f(
-                self._particle_cfg["system1"]["particle_scale_x"], 
-                self._particle_cfg["system1"]["particle_scale_y"], 
-                self._particle_cfg["system1"]["particle_scale_z"]
-            )
-        )
-        
-        # Calculate sampling distance based on particle system parameters
-        solid_rest_offset =  self._particle_cfg["system1"]["particle_system_solid_rest_offset"]
-        particle_sampler_distance = 2.5 * solid_rest_offset
-
-        # Apply particle sampling on the mesh
-        sampling_api = PhysxSchema.PhysxParticleSamplingAPI.Apply(cube_mesh.GetPrim())
-        # sampling_api.CreateSamplingDistanceAttr().Set(particle_sampler_distance)
-        sampling_api.CreateMaxSamplesAttr().Set(5e5)
-        sampling_api.CreateVolumeAttr().Set(True)  # Set to True if sampling volume, False for surface
-
-        cube_mesh.CreateVisibilityAttr("invisible")
-
-        # create particle set
-        points = UsdGeom.Points.Define(self._stage, particle_set_path)
-        points.CreateDisplayColorAttr().Set(Vt.Vec3fArray([Gf.Vec3f(71.0 / 255.0, 125.0 / 255.0, 1.0)]))
-        particleUtils.configure_particle_set(points.GetPrim(), particle_system_path, 
-        self._particle_cfg["system1"]["particle_grid_self_collision"], self._particle_cfg["system1"]["particle_grid_fluid"], 
-        self._particle_cfg["system1"]["particle_grid_particle_group"], self._particle_cfg["system1"]["particle_grid_particle_mass"], self._particle_cfg["system1"]["particle_grid_density"])
-
-        # reference the particle set in the sampling api
-        sampling_api.CreateParticlesRel().AddTarget(particle_set_path)
-
 
     def _visualize_terrain_heights(self):
         """
@@ -1994,6 +2028,7 @@ class AnymalTerrainTask(RLTask):
         px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
         py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
         num_points = self.num_envs * self.num_height_points
+        
         for idx in range(num_points):
             # Compute world x and y from grid indices
             world_x = px[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size

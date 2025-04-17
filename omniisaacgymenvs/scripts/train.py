@@ -48,21 +48,24 @@ class RLGTrainer:
         self.cfg = cfg
         self.cfg_dict = cfg_dict
 
-    def launch_rlg_hydra(self, env):
-        # `create_rlgpu_env` is environment construction function which is passed to RL Games and called internally.
-        # We use the helper function here to specify the environment config.
+    def launch_rlg_hydra(self):
+
         self.cfg_dict["task"]["test"] = self.cfg.test
         self.rlg_config_dict = omegaconf_to_dict(self.cfg.train)
 
     def run(self, env, module_path, experiment_dir):
         log_dir = os.path.join(module_path, "runs")
+        os.makedirs(log_dir, exist_ok=True)
+        device = self.cfg.rl_device
+
+        if self.cfg.test:
+            log_dir = os.path.join(log_dir, "test")
 
         if self.cfg.wandb_activate:
             # Make sure to install WandB if you actually use this.
             import wandb
-            time_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-            run_name = f"{self.cfg.wandb_name}_{time_str}"
+            run_name=f"{self.cfg.wandb_name}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_test" if self.cfg.test else None
 
             wandb.init(
                 project=self.cfg.wandb_project,
@@ -73,23 +76,64 @@ class RLGTrainer:
                 id=run_name,
                 resume="allow",
                 monitor_gym=True,
+                dir=log_dir  # Setting the directory for wandb logs.
             )
 
-        device = 'cuda:0'
-        runner = OnPolicyRunner(env, self.rlg_config_dict, log_dir, device=device)
-        runner.learn(num_learning_iterations=self.rlg_config_dict["runner"]["max_iterations"], init_at_random_ep_len=True)
+        runner = OnPolicyRunner(env, self.rlg_config_dict, log_dir, device=device,
+                                wandb_activate=self.cfg.wandb_activate)
 
+        if self.cfg.checkpoint and self.cfg.train.runner.resume:
+            print(f"Resuming training from checkpoint: {self.cfg.checkpoint}")
+            runner.load(self.cfg.checkpoint)
 
-        # dump config dict
-        os.makedirs(experiment_dir, exist_ok=True)
-        with open(os.path.join(experiment_dir, "config.yaml"), "w") as f:
-            f.write(OmegaConf.to_yaml(self.cfg))
+        if not self.cfg.test:
+            runner.learn(num_learning_iterations=self.rlg_config_dict["runner"]["max_iterations"], init_at_random_ep_len=True)
 
+            # dump config dict#
+            os.makedirs(experiment_dir, exist_ok=True)
+            with open(os.path.join(experiment_dir, "config.yaml"), "w") as f:
+                f.write(OmegaConf.to_yaml(self.cfg))
+
+        else:
+            policy = runner.get_inference_policy(device=device)
+            first_frame = True
+            step_counter = 0
+            max_steps = 10 * int(env.max_episode_length)
+            x_vel_cmd = torch.tensor([1.0], device=device)
+            y_vel_cmd = torch.tensor([0.0], device=device)
+            z_vel_cmd = torch.tensor([0.0], device=device)
+
+            while env.simulation_app.is_running():
+                if env.world.is_playing():
+                    if first_frame:
+                        env.reset()
+                        first_frame = False
+                    else:
+                        if step_counter >= max_steps:
+                            break  # stop after a fixed number of steps (optional for test duration)
+                        obs = env.get_observations()
+                        actions = policy(obs.detach())
+                        env._task.commands[:, 0] = x_vel_cmd
+                        env._task.commands[:, 1] = y_vel_cmd
+                        env._task.commands[:, 2] = z_vel_cmd
+
+                        env.step(actions.detach())
+                        if self.cfg.wandb_activate:
+                            # Assuming the task (e.g. AnymalTerrainTask) is available as env.task
+                            mean_episode_sums = {}
+                            for key, tensor in env._task.episode_sums.items():
+                                # Compute the mean value across all environments
+                                mean_episode_sums[f"test/episode_sum_{key}"] = float(tensor.mean().item())
+                            # Optionally, log additional test metrics here.
+                            wandb.log(mean_episode_sums, step=step_counter)
+                        step_counter += 1
+                else:
+                    env.world.step(render=not self.cfg.headless)
+            env.reset()
+        env.simulation_app.close()
 
 @hydra.main(version_base=None, config_name="config", config_path="../cfg")
 def parse_hydra_configs(cfg: DictConfig):
-
-    time_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     headless = cfg.headless
 
@@ -101,9 +145,7 @@ def parse_hydra_configs(cfg: DictConfig):
     local_rank = int(os.getenv("LOCAL_RANK", "0"))
     # global rank (GPU id) in multi-gpu multi-node mode
     global_rank = int(os.getenv("RANK", "0"))
-    if cfg.multi_gpu:
-        cfg.device_id = local_rank
-        cfg.rl_device = f'cuda:{local_rank}'
+
     enable_viewport = "enable_cameras" in cfg.task.sim and cfg.task.sim.enable_cameras
 
     # select kit app file
@@ -145,6 +187,38 @@ def parse_hydra_configs(cfg: DictConfig):
         if cfg.checkpoint is None:
             quit()
 
+    # Optionally override config values in test mode:
+    if cfg.test:
+        # Overwrite specific config entries for test scenarios:
+        cfg.task.env.numEnvs = 4
+        cfg.task.env.terrain.numLevels = 1
+        cfg.task.env.terrain.numTerrains = 1
+        cfg.task.env.terrain.curriculum = False
+        cfg.task.env.terrain.VelocityCurriculum = False
+        cfg.task.env.terrain.terrain_types = 1
+
+        cfg.task.env.terrain.terrain_types = [
+            {
+                "name": "flat",
+                "particle_present": False,
+                "compliant": False,
+                "count": 2,
+                "level": 0
+            }
+        ]
+        cfg.task.env.learn.addNoise = False
+        cfg.task.env.learn.randomizationRanges.randomizeGravity = False
+        cfg.task.env.learn.randomizationRanges.randomizeFriction = False
+        cfg.task.env.learn.randomizationRanges.randomizeCOM = False
+        cfg.task.env.learn.randomizationRanges.randomizeAddedMass = False
+        cfg.task.env.learn.randomizationRanges.randomizeMotorStrength = False
+        cfg.task.env.learn.randomizationRanges.randomizeMotorOffset = False
+        cfg.task.env.learn.randomizationRanges.randomizeKpFactor = False
+        cfg.task.env.learn.randomizationRanges.randomizeKdFactor = False
+        cfg.task.env.learn.randomizationRanges.material_randomization.enabled = False  
+        # Add any other overrides you need.
+
+
     cfg_dict = omegaconf_to_dict(cfg)
     print_dict(cfg_dict)
 
@@ -158,7 +232,7 @@ def parse_hydra_configs(cfg: DictConfig):
 
     torch.cuda.set_device(local_rank)
     rlg_trainer = RLGTrainer(cfg, cfg_dict)
-    rlg_trainer.launch_rlg_hydra(env)
+    rlg_trainer.launch_rlg_hydra()
     rlg_trainer.run(env, module_path, experiment_dir)
     env.close()
 

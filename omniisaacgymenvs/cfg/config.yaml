@@ -25,8 +25,7 @@ sim_device: 'gpu'
 device_id: 0
 # device to run RL
 rl_device: 'cuda:0'
-# multi-GPU training
-multi_gpu: False
+
 
 ## PhysX arguments
 num_threads: 4 # Number of worker threads used by PhysX - for CPU PhysX only.
@@ -37,15 +36,13 @@ solver_type: 1 # 0: pgs, 1: tgs
 test: False
 # used to set checkpoint path
 checkpoint: ''
-# evaluate checkpoint
-evaluation: False
+
 
 # disables rendering
 headless: False
 # enables native livestream
 enable_livestream: False
-# timeout for MT script
-mt_timeout: 300
+
 
 # enables viewport recording
 enable_recording: False

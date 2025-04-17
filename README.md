@@ -248,7 +248,7 @@ Common arguments for the training scripts are:
 * `sim_device=SIM_DEVICE` - Device used for physics simulation. Set to `gpu` (default) to use GPU and to `cpu` for CPU.
 * `device_id=DEVICE_ID` - Device ID for GPU to use for simulation and task. Defaults to `0`. This parameter will only be used if simulation runs on GPU.
 * `rl_device=RL_DEVICE` - Which device / ID to use for the RL algorithm. Defaults to `cuda:0`, and follows PyTorch-like device syntax.
-* `multi_gpu=MULTI_GPU` - Whether to train using multiple GPUs. Defaults to `False`. Note that this option is only available with `rlgames_train.py`.
+
 * `test=TEST`- If set to `True`, only runs inference on the policy and does not do any training.
 * `checkpoint=CHECKPOINT_PATH` - Path to the checkpoint to load for training or testing.
 * `headless=HEADLESS` - Whether to run in headless mode.
@@ -277,41 +277,10 @@ In some places in the config you will find other variables referenced (for examp
  `num_actors: ${....task.env.numEnvs}`). Each `.` represents going one level up in the config hierarchy.
  This is documented fully [here](https://omegaconf.readthedocs.io/en/latest/usage.html#variable-interpolation).
 
-### Tensorboard
-
-Tensorboard can be launched during training via the following command:
-```bash
-PYTHON_PATH -m tensorboard.main --logdir runs/EXPERIMENT_NAME/summaries
-```
-
 ## WandB support
 
 You can run (WandB)[https://wandb.ai/] with OmniIsaacGymEnvs by setting `wandb_activate=True` flag from the command line. You can set the group, name, entity, and project for the run by setting the `wandb_group`, `wandb_name`, `wandb_entity` and `wandb_project` arguments. Make sure you have WandB installed in the Isaac Sim Python executable with `PYTHON_PATH -m pip install wandb` before activating.
 
-
-## Training with Multiple GPUs
-
-To train with multiple GPUs, use the following command, where `--proc_per_node` represents the number of available GPUs:
-```bash
-PYTHON_PATH -m torch.distributed.run --nnodes=1 --nproc_per_node=2 scripts/rlgames_train.py headless=True task=Ant multi_gpu=True
-```
-
-## Multi-Node Training
-
-To train across multiple nodes/machines, it is required to launch an individual process on each node.
-For the master node, use the following command, where `--proc_per_node` represents the number of available GPUs, and `--nnodes` represents the number of nodes:
-```bash
-PYTHON_PATH -m torch.distributed.run --nproc_per_node=2 --nnodes=2 --node_rank=0 --rdzv_id=123 --rdzv_backend=c10d --rdzv_endpoint=localhost:5555 scripts/rlgames_train.py headless=True task=Ant multi_gpu=True
-```
-
-Note that the port (`5555`) can be replaced with any other available port.
-
-For non-master nodes, use the following command, replacing `--node_rank` with the index of each machine:
-```bash
-PYTHON_PATH -m torch.distributed.run --nproc_per_node=2 --nnodes=2 --node_rank=1 --rdzv_id=123 --rdzv_backend=c10d --rdzv_endpoint=ip_of_master_machine:5555 scripts/rlgames_train.py headless=True task=Ant multi_gpu=True
-```
-
-For more details on multi-node training with PyTorch, please visit [here](https://pytorch.org/tutorials/intermediate/ddp_series_multinode.html). As mentioned in the PyTorch documentation, "multinode training is bottlenecked by inter-node communication latencies". When this latency is high, it is possible multi-node training will perform worse than running on a single node instance.
 
 ## Tasks
 
