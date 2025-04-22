@@ -72,7 +72,7 @@ class RLGTrainer:
                 group=self.cfg.wandb_group,
                 entity=self.cfg.wandb_entity,
                 config=self.cfg_dict,
-                sync_tensorboard=True,
+                # sync_tensorboard=True,
                 id=run_name,
                 resume="allow",
                 monitor_gym=True,
@@ -98,7 +98,9 @@ class RLGTrainer:
             policy = runner.get_inference_policy(device=device)
             first_frame = True
             step_counter = 0
-            max_steps = 10 * int(env.max_episode_length)
+            num_episodes = 2
+            max_steps = num_episodes * int(env.max_episode_length)
+            print(f"Running test for {max_steps} steps.")
             x_vel_cmd = torch.tensor([1.0], device=device)
             y_vel_cmd = torch.tensor([0.0], device=device)
             z_vel_cmd = torch.tensor([0.0], device=device)
@@ -110,6 +112,7 @@ class RLGTrainer:
                         first_frame = False
                     else:
                         if step_counter >= max_steps:
+                            print("Test duration reached. Stopping the simulation.")
                             break  # stop after a fixed number of steps (optional for test duration)
                         obs = env.get_observations()
                         actions = policy(obs.detach())
@@ -126,7 +129,24 @@ class RLGTrainer:
                                 mean_episode_sums[f"test/episode_sum_{key}"] = float(tensor.mean().item())
                             # Optionally, log additional test metrics here.
                             wandb.log(mean_episode_sums, step=step_counter)
+                            
+                            # foot_forces = env._task.foot_contact_forces.detach().cpu()    # Nx4x3
+                            # foot0 = foot_forces[0]
+                            # foot0_norms = torch.norm(foot0, dim=1)       # Nx4
+                            # force_log = {}
+                            # feet = ["FL", "FR", "RL", "RR"]
+                            # for i, foot_name in enumerate(feet):
+                            #     # log each component
+                            #     fx, fy, fz = foot0[i].tolist()
+                            #     force_log[f"test/foot0_{foot_name}_fx"] = fx
+                            #     force_log[f"test/foot0_{foot_name}_fy"] = fy
+                            #     force_log[f"test/foot0_{foot_name}_fz"] = fz
+                            #     # log the norm
+                            #     force_log[f"test/foot0_{foot_name}_norm"] = foot0_norms[i].item()
+                            # wandb.log(force_log, step=step_counter)
+
                         step_counter += 1
+
                 else:
                     env.world.step(render=not self.cfg.headless)
         env.simulation_app.close()
