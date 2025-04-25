@@ -212,8 +212,9 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.numEnvs = 4
         cfg.task.env.terrain.numLevels = 1
         cfg.task.env.terrain.numTerrains = 1
+
         cfg.task.env.terrain.curriculum = False
-        cfg.task.env.terrain.VelocityCurriculum = False
+        cfg.task.env.commands.VelocityCurriculum = False
         cfg.task.env.terrain.terrain_types = 1
 
         cfg.task.env.terrain.terrain_types = [

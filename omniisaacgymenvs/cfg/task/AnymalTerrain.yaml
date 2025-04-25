@@ -21,8 +21,7 @@ env:
     numLevels: 10 # for no curriculum
     numTerrains: 10 # for no curriculum
 
-    curriculum: True
-    
+    curriculum: False
     
     mapLength: 8.
     mapWidth: 8.
@@ -51,31 +50,31 @@ env:
         particle_present: False
         count: 5
         level: 1
-      - name: central_depression_terrain
-        compliant: True
-        count: 2
-        level: 0
-        particle_present: True
-        system: 1
-        depth: 0.13
-        size: 4           # Length of the terrain grid (number of points)
-      - name: central_depression_terrain
-        compliant: True
-        count: 1
-        level: 1
-        particle_present: True
-        system: 2
-        depth: 0.1
-        size: 3           # Length of the terrain grid (number of points)
-      - name: central_depression_terrain
-        compliant: True
-        count: 1
-        level: 1
-        particle_present: True
-        particle_params:
-        system: 3
-        depth: 0.1
-        size: 3           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 2
+      #   level: 0
+      #   particle_present: True
+      #   system: 1
+      #   depth: 0.13
+      #   size: 4           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 1
+      #   level: 1
+      #   particle_present: True
+      #   system: 2
+      #   depth: 0.1
+      #   size: 3           # Length of the terrain grid (number of points)
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 1
+      #   level: 1
+      #   particle_present: True
+      #   particle_params:
+      #   system: 3
+      #   depth: 0.1
+      #   size: 3           # Length of the terrain grid (number of points)
 
 
     compliant:
@@ -184,7 +183,7 @@ env:
     vAngular: [0.0, 0.0, 0.0] # x,y,z [rad/s]
 
   commands:
-    VelocityCurriculum: True
+    VelocityCurriculum: False
     curriculum_seed:  0
 
     limit_vel_x:     [-1.0,  1.0]
@@ -310,7 +309,7 @@ env:
     priv_pbd_fluid: True
 
     material_randomization:
-      enabled: True
+      enabled: False
       compliance:
         enabled: False
         interval: 50

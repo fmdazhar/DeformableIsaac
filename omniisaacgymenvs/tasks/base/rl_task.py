@@ -35,7 +35,6 @@ import omni.isaac.core.utils.warp.tensor as wp_utils
 import omni.kit
 import omni.usd
 import torch
-import warp as wp
 from gym import spaces
 from omni.isaac.cloner import GridCloner
 from .base_task import BaseTask
@@ -289,80 +288,3 @@ class RLTask(RLTaskInterface):
     def set_is_extension(self, is_extension):
         self.is_extension = is_extension
 
-class RLTaskWarp(RLTask):
-    def cleanup(self) -> None:
-        """Prepares torch buffers for RL data collection."""
-        # prepare tensors
-        self.obs_buf = wp.zeros((self._num_envs, self.num_observations), device=self._device, dtype=wp.float32)
-        self.states_buf = wp.zeros((self._num_envs, self.num_states), device=self._device, dtype=wp.float32)
-        self.rew_buf = wp.zeros(self._num_envs, device=self._device, dtype=wp.float32)
-        self.reset_buf = wp_utils.ones(self._num_envs, device=self._device, dtype=wp.int32)
-        self.progress_buf = wp.zeros(self._num_envs, device=self._device, dtype=wp.int32)
-        self.zero_states_buf_torch = torch.zeros(
-            (self._num_envs, self.num_states), device=self._device, dtype=torch.float32
-        )
-        self.extras = {}
-
-    def reset(self):
-        """Flags all environments for reset."""
-        wp.launch(reset_progress, dim=self._num_envs, inputs=[self.progress_buf], device=self._device)
-
-    def post_physics_step(self):
-        """Processes RL required computations for observations, states, rewards, resets, and extras.
-            Also maintains progress buffer for tracking step count per environment.
-
-        Returns:
-            obs_buf(torch.Tensor): Tensor of observation data.
-            rew_buf(torch.Tensor): Tensor of rewards data.
-            reset_buf(torch.Tensor): Tensor of resets/dones data.
-            extras(dict): Dictionary of extras data.
-        """
-
-        wp.launch(increment_progress, dim=self._num_envs, inputs=[self.progress_buf], device=self._device)
-
-        if self._env.world.is_playing():
-            self.get_observations()
-            self.get_states()
-            self.calculate_metrics()
-            self.is_done()
-            self.get_extras()
-
-        obs_buf_torch = wp.to_torch(self.obs_buf)
-        rew_buf_torch = wp.to_torch(self.rew_buf)
-        reset_buf_torch = wp.to_torch(self.reset_buf)
-
-        return obs_buf_torch, rew_buf_torch, reset_buf_torch, self.extras
-
-    def get_states(self):
-        """API for retrieving states buffer, used for asymmetric AC training.
-
-        Returns:
-            states_buf(torch.Tensor): States buffer.
-        """
-        if self.num_states > 0:
-            return wp.to_torch(self.states_buf)
-        else:
-            return self.zero_states_buf_torch
-
-    def set_up_scene(self, scene) -> None:
-        """Clones environments based on value provided in task config and applies collision filters to mask
-            collisions across environments.
-
-        Args:
-            scene (Scene): Scene to add objects to.
-        """
-
-        super().set_up_scene(scene)
-        self._env_pos = wp.from_torch(self._env_pos)
-
-
-@wp.kernel
-def increment_progress(progress_buf: wp.array(dtype=wp.int32)):
-    i = wp.tid()
-    progress_buf[i] = progress_buf[i] + 1
-
-
-@wp.kernel
-def reset_progress(progress_buf: wp.array(dtype=wp.int32)):
-    i = wp.tid()
-    progress_buf[i] = 1

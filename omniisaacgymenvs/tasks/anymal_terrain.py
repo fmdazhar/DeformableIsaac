@@ -111,13 +111,13 @@ class AnymalTerrainTask(RLTask):
         self.reward_scales = self._task_cfg["env"]["learn"]["scales"]
 
         # command ranges
-        self.command_x_range = self._task_cfg["env"]["randomCommandVelocityRanges"]["linear_x"] #TODO
-        self.command_y_range = self._task_cfg["env"]["randomCommandVelocityRanges"]["linear_y"]
-        self.command_yaw_range = self._task_cfg["env"]["randomCommandVelocityRanges"]["yaw"]
-        self.limit_vel_x = self._task_cfg["env"]["limitCommandVelocityRanges"]["linear_x"]
-        self.limit_vel_y = self._task_cfg["env"]["limitCommandVelocityRanges"]["linear_y"]
-        self.limit_vel_yaw = self._task_cfg["env"]["limitCommandVelocityRanges"]["yaw"]
-        self.vel_curriculum = self._task_cfg["env"]["terrain"]["VelocityCurriculum"] #TODO
+        self.command_x_range = self._task_cfg["env"]["commands"]["lin_vel_x"]
+        self.command_y_range = self._task_cfg["env"]["commands"]["lin_vel_y"]
+        self.command_yaw_range = self._task_cfg["env"]["commands"]["ang_vel_yaw"]
+        self.limit_vel_x = self._task_cfg["env"]["commands"]["limit_vel_x"]
+        self.limit_vel_y = self._task_cfg["env"]["commands"]["limit_vel_y"]
+        self.limit_vel_yaw = self._task_cfg["env"]["commands"]["limit_vel_yaw"]
+        self.vel_curriculum = self._task_cfg["env"]["commands"]["VelocityCurriculum"]
 
         # base init state
         pos = self._task_cfg["env"]["baseInitState"]["pos"]
@@ -183,9 +183,8 @@ class AnymalTerrainTask(RLTask):
         self._particle_cfg = self._task_cfg["env"]["terrain"]["particles"]
 
         self.terrain = Terrain(self._task_cfg["env"]["terrain"])
-        self.terrain_origins = torch.from_numpy(self.terrain.env_origins).float().to(self.device)
-        self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float).to(self.device)
-        self.terrain_types = [int(l.item()) for l in torch.unique(self.terrain_details[:, 4])]
+        self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float)
+
 
         self._particles_active = (self.terrain_details[:, 5] > 0).any().item()
         self._compliance_active = (self.terrain_details[:, 6] > 0).any().item()
@@ -201,10 +200,11 @@ class AnymalTerrainTask(RLTask):
             self._pbd_idx = {}
             self.pbd_by_sys = {}
 
-        # 28 always–present privates, +8 for compliant contacts, +pbd parameters
-        self._num_priv = (28 if self.priv_base else 0) \
-                 + (8 if (self._compliance_active and self.priv_compliance) else 0) \
-                 + len(self.pbd_parameters) if self.pbd_parameters is not None else 0
+        self._num_priv = (
+            (28 if self.priv_base else 0)
+        + (8  if (self._compliance_active and self.priv_compliance) else 0)
+        + (len(self.pbd_parameters) if self.pbd_parameters is not None else 0)
+        )
         print(f"Num priv: {self._num_priv}")
     
     def init_pbd(self):
@@ -289,9 +289,11 @@ class AnymalTerrainTask(RLTask):
         x = 0.1 * torch.tensor(
             [-1, 0, 1], device=self.device, requires_grad=False
         )
+        
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
+        num_points = grid_x.numel()
         base = torch.stack([grid_x.flatten(), grid_y.flatten(),
-                        torch.zeros(9, device=self.device)], dim=1)  # (9,3)
+                        torch.zeros(num_points, device=self.device)], dim=1)  # (9,3)
         foot_offsets = base.repeat(4, 1)
         self._num_height_points = foot_offsets.shape[0] 
         points = foot_offsets.unsqueeze(0).repeat(self.num_envs, 1, 1)        
@@ -306,8 +308,9 @@ class AnymalTerrainTask(RLTask):
             [-2, -1, 0, 1, 2], device=self.device, requires_grad=False
         )
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
+        num_points = grid_x.numel()
         base = torch.stack([grid_x.flatten(), grid_y.flatten(),
-                        torch.zeros(9, device=self.device)], dim=1)  # (9,3)
+                        torch.zeros(num_points, device=self.device)], dim=1) 
         foot_offsets = base.repeat(4, 1)
         self._num_particle_height_points = foot_offsets.shape[0] 
         points = foot_offsets.unsqueeze(0).repeat(self.num_envs, 1, 1)        
@@ -315,6 +318,9 @@ class AnymalTerrainTask(RLTask):
         return points
 
     def _create_trimesh(self, create_mesh=True):
+        self.terrain_details = self.terrain_details.to(self.device) 
+        self.terrain_origins = torch.from_numpy(self.terrain.env_origins).float().to(self.device)
+        self.terrain_types = [int(l.item()) for l in torch.unique(self.terrain_details[:, 4])]
         vertices = self.terrain.vertices
         triangles = self.terrain.triangles
         position = torch.tensor([-self.terrain.border_size, -self.terrain.border_size, 0.0])
@@ -468,7 +474,7 @@ class AnymalTerrainTask(RLTask):
 
         # Update compliance and stored PBD parameters for these newly changed envs
         self.set_compliance(env_ids)
-        self.store_pbd_params(env_ids) 
+        # self.store_pbd_params(env_ids) 
 
     def set_up_scene(self, scene) -> None:
         self._stage = get_current_stage()
@@ -749,7 +755,7 @@ class AnymalTerrainTask(RLTask):
                     self._material_apis[i].CreateCompliantContactDampingAttr().Set(c)
 
 
-    def store_pbd_params(self, env_ids: Optional[torch.Tensor] = None):
+    def store_pbd_params(self, env_ids=None):
         """
         Populates self.pbd_parameters for each env that has a non-zero system_idx.
         Each row in self.pbd_parameters corresponds to one environment.
@@ -864,7 +870,7 @@ class AnymalTerrainTask(RLTask):
         self.up_axis_idx = 2
         self.common_step_counter = 0
         self.extras = {}
-        self.noise_scale_vec = self._get_noise_scale_vec(self._task_cfg)
+        self.noise_scale_vec = self._get_noise_scale_vec()
         self.commands = torch.zeros(
             self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False
         )  # x vel, y vel, yaw vel, heading
@@ -964,7 +970,6 @@ class AnymalTerrainTask(RLTask):
         self.stiffness_scale, self.stiffness_shift = self.get_scale_shift(self.stiffness_range)
         self.damping_scale, self.damping_shift = self.get_scale_shift(self.damping_range)
         self.gravity_scale, self.gravity_shift = self.get_scale_shift(self.gravity_range)
-        self.pbd_scale, self.pbd_shift = self.get_scale_shift(self.pbd_range)
 
         self.default_base_masses = self._anymals._base.get_masses().clone()
         self.default_inertias = self._anymals._base.get_inertias().clone()
@@ -999,8 +1004,8 @@ class AnymalTerrainTask(RLTask):
             self._set_coms(self._anymals._base, env_ids=env_ids)
         if self._task_cfg["env"]["randomizationRanges"]["randomizeFriction"]:
             self._set_friction(self._anymals._foot, env_ids=env_ids)
-        self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["enabled"]:
-            self.randomize_pbd_material(env_ids=env_ids)
+        if self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["enabled"]:
+            self.randomize_pbd_material()
 
         self._prepare_reward_function()
 
@@ -1050,12 +1055,21 @@ class AnymalTerrainTask(RLTask):
             jitter_x = self.terrain.env_length * 0.4
             jitter_y = self.terrain.env_width * 0.4
 
-        self.base_pos[env_ids, 0] += torch_rand_float(
-            -jitter_x, jitter_x, (len(env_ids),), device=self.device
-        )
-        self.base_pos[env_ids, 1] += torch_rand_float(
-            -jitter_y, jitter_y, (len(env_ids),), device=self.device
-        )
+        # generate an N×1 tensor, then squeeze to (N,)
+        rand_x = torch_rand_float(
+            -jitter_x, jitter_x,
+            (len(env_ids), 1),
+            device=self.device
+        ).squeeze(1)
+        rand_y = torch_rand_float(
+            -jitter_y, jitter_y,
+            (len(env_ids), 1),
+            device=self.device
+        ).squeeze(1)
+
+        self.base_pos[env_ids, 0] += rand_x
+        self.base_pos[env_ids, 1] += rand_y
+
         rand_yaw = torch_rand_float(0, 2 * np.pi, (len(env_ids), 1), device=self.device)
         random_quat = torch.cat([
             torch.cos(rand_yaw / 2),
@@ -1350,6 +1364,7 @@ class AnymalTerrainTask(RLTask):
         else:
             final_obs_no_history = proprio_obs
         # 4) Build privileged observations
+        priv_parts = []
         if self.priv_base:
             priv_parts += [
                 (self.static_friction_coeffs - self.friction_shift) * self.friction_scale,
@@ -1992,14 +2007,17 @@ class AnymalTerrainTask(RLTask):
         # 4) Accumulate the sphere positions (and assign a prototype index of 0 for all)
         positions = []
         proto_indices = []
+        height_px_flat      = self.height_px.flatten()
+        height_py_flat      = self.height_py.flatten()
+        measured_heights_flat = self.measured_heights.flatten()
 
         num_points = self.num_envs * self._num_height_points
         for idx in range(num_points):
             # Compute world x and y from grid indices
-            world_x = self.height_px[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size
-            world_y = self.height_px[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size
+            world_x = height_px_flat[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size
+            world_y = height_py_flat[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size
             # Look up the measured height at the grid cell and convert to world units
-            measured_z = self.measured_heights[idx].item()
+            measured_z = measured_heights_flat[idx].item()
             positions.append(Gf.Vec3f(world_x, world_y, measured_z))
             proto_indices.append(0)
 
