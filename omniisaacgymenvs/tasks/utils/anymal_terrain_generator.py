@@ -1,31 +1,3 @@
-# Copyright (c) 2018-2022, NVIDIA Corporation
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-#    contributors may be used to endorse or promote products derived from
-#    this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 import math
 
 import numpy as np
@@ -36,7 +8,7 @@ from omniisaacgymenvs.utils.terrain_utils.terrain_utils import *
 # terrain generator
 
 class Terrain:
-    def __init__(self, cfg, num_robots) -> None:
+    def __init__(self, cfg) -> None:
         self.cfg = cfg
         self.horizontal_scale = 0.1
         self.vertical_scale = 0.005
@@ -65,13 +37,7 @@ class Terrain:
 
         # Master heightfield storage
         self.height_field_raw = np.zeros((self.tot_rows, self.tot_cols), dtype=np.int16)
-        self.terrain_mapping = {
-                                "flat": 0,
-                                "rough": 1,
-                                "compliant" : 2,
-                                "central_depression_terrain": 3,
-                                # add other terrain names if needed
-                            }
+
         # We'll keep track of each sub-terrain's info in a list:
         self.terrain_details = []
 
@@ -108,7 +74,11 @@ class Terrain:
             system = terrain_type_info.get("system", 0)
             particles = int(terrain_type_info.get("particle_present", "False"))
             compliant = int(terrain_type_info.get("compliant", "False"))
-
+            fluid = bool(
+                self.cfg["particles"]
+                    .get(f"system{system}", {})
+                    .get("particle_grid_fluid", False)
+            )
             for j in range(count):  # Generate `count` terrains for this type
                 idx = len(self.terrain_details)  # Unique terrain index
                 terrain = SubTerrain(
@@ -161,9 +131,7 @@ class Terrain:
                     terrain.height_field_raw[center_x1:center_x2, center_y1:center_y2]
                 ) * self.vertical_scale
                 self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
-
-                # Convert terrain name to a number using the mapping
-                terrain_label = self.terrain_mapping.get(name, -1)  # default to -1 if not found
+                terrain_type = self.infer_terrain_type(compliant, particles, fluid)
 
                 # Store terrain details
                 self.terrain_details.append((
@@ -171,7 +139,7 @@ class Terrain:
                     level,
                     i,
                     j,
-                    terrain_label,
+                    terrain_type,
                     particles,
                     compliant,
                     system,
@@ -181,8 +149,24 @@ class Terrain:
                     lx1,
                     ly0,
                     ly1,
+                    fluid,
+                    name
                 ))
 
+    @staticmethod
+    def infer_terrain_type(compliant: int, particles: int, fluid: bool) -> int:
+        """
+        Infer terrain type index based on compliance and particle flags:
+          0: rigid    (non-compliant, no particles)
+          1: compliant (compliant, no particles)
+          2: granular (particles, non-fluid)
+          3: fluid    (particles and fluid)
+        """
+        if particles:
+            return 3 if fluid else 2
+        else:
+            return 1 if compliant else 0
+        
     def full_flat_terrain(self, height_meters=0.0):
             """
             Generate flat terrain for all sub-terrains instead of random obstacles.
@@ -224,14 +208,12 @@ class Terrain:
                 
                 env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2]) * self.vertical_scale
                 self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
-
-                terrain_label = self.terrain_mapping.get("flat", 0)
                 self.terrain_details.append((
                     k,         # Unique terrain index
                     0,         # level (default)
                     i,         # row index
                     j,         # column index
-                    terrain_label,
+                    0,
                     0,         # particles (default)
                     0,         # compliant (default)
                     0,         # system (default)
@@ -241,4 +223,5 @@ class Terrain:
                     end_x,     # lx1: end index in x
                     start_y,   # ly0: start index in y
                     end_y,     # ly1: end index in y
+                    0
                 ))
