@@ -114,7 +114,7 @@ class RLGTrainer:
                         if step_counter >= max_steps:
                             print("Test duration reached. Stopping the simulation.")
                             break  # stop after a fixed number of steps (optional for test duration)
-                        obs = env.get_observations()
+                        obs = env.get_observations().to(device)
                         actions = policy(obs.detach())
                         env._task.commands[:, 0] = x_vel_cmd
                         env._task.commands[:, 1] = y_vel_cmd
@@ -209,9 +209,9 @@ def parse_hydra_configs(cfg: DictConfig):
     # Optionally override config values in test mode:
     if cfg.test:
         # Overwrite specific config entries for test scenarios:
-        cfg.task.env.numEnvs = 4
-        cfg.task.env.terrain.numLevels = 1
-        cfg.task.env.terrain.numTerrains = 1
+        cfg.task.env.numEnvs = 128
+        cfg.task.env.terrain.numLevels = 10
+        cfg.task.env.terrain.numTerrains = 10
 
         cfg.task.env.terrain.curriculum = False
         cfg.task.env.commands.VelocityCurriculum = False

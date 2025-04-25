@@ -1052,9 +1052,9 @@ class AnymalTerrainTask(RLTask):
         if self.curriculum:
             jitter_x = jitter_y = 1.0
         else:
-            jitter_x = self.terrain.env_length * 0.4
-            jitter_y = self.terrain.env_width * 0.4
-
+            jitter_x = self.terrain.env_rows * self.terrain.env_length * 0.4
+            jitter_y = self.terrain.env_cols * self.terrain.env_width * 0.4
+            
         # generate an N×1 tensor, then squeeze to (N,)
         rand_x = torch_rand_float(
             -jitter_x, jitter_x,
