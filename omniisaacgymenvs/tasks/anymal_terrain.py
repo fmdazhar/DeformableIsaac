@@ -156,12 +156,17 @@ class AnymalTerrainTask(RLTask):
         self.dt = self.decimation * self._task_cfg["sim"]["dt"]
         self.max_episode_length_s = self._task_cfg["env"]["learn"]["episodeLength_s"]
         self.max_episode_length = int(self.max_episode_length_s / self.dt + 0.5)
+        self.push_enabled = self._task_cfg["env"]["learn"]["pushEnabled"]
         self.push_interval = int(self._task_cfg["env"]["learn"]["pushInterval_s"] / self.dt + 0.5)
-        self.pbd_randomize_interval = int(self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["interval"] / self.dt + 0.5)
+        self.randomize_pbd = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["enabled"]
+        self.randomize_pbd_interval = int(self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["interval"] / self.dt + 0.5)
+        self.randomize_gravity = self._task_cfg["env"]["randomizationRanges"]["randomizeGravity"]
         self.gravity_randomize_interval = int(self._task_cfg["env"]["randomizationRanges"]["gravityRandIntervalSecs"] / self.dt + 0.5)
         self.Kp = self._task_cfg["env"]["control"]["stiffness"]
         self.Kd = self._task_cfg["env"]["control"]["damping"]
         self.curriculum = self._task_cfg["env"]["terrain"]["curriculum"]
+        self.teleport_active = self._task_cfg["env"]["learn"]["teleportActive"]
+        self.teleport_buffer = self._task_cfg["env"]["learn"]["teleportBuffer"]
         self.measure_heights = self._task_cfg["env"]["terrain"]["measureHeights"]
 
         self.base_threshold = 0.2
@@ -184,7 +189,6 @@ class AnymalTerrainTask(RLTask):
 
         self.terrain = Terrain(self._task_cfg["env"]["terrain"])
         self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float)
-
 
         self._particles_active = (self.terrain_details[:, 5] > 0).any().item()
         self._compliance_active = (self.terrain_details[:, 6] > 0).any().item()
@@ -474,7 +478,7 @@ class AnymalTerrainTask(RLTask):
 
         # Update compliance and stored PBD parameters for these newly changed envs
         self.set_compliance(env_ids)
-        # self.store_pbd_params(env_ids) 
+        self.store_pbd_params(env_ids) 
 
     def set_up_scene(self, scene) -> None:
         self._stage = get_current_stage()
@@ -560,7 +564,13 @@ class AnymalTerrainTask(RLTask):
             angle = self.named_default_joint_angles[name]
             self.default_dof_pos[:, i] = angle
 
-    def _randomize_dof_props(self, env_ids):
+    def _randomize_dof_props(self, env_ids=None):
+        """Randomize the properties of the DOFs for the given environment IDs."""
+        # If no env_ids are provided, operate on all environments
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            env_ids = env_ids.to(self.device)
 
         if self._task_cfg["env"]["randomizationRanges"]["randomizeMotorStrength"]:
             self.motor_strengths[env_ids, :] = torch.rand(len(env_ids), dtype=torch.float, device=self.device,
@@ -580,17 +590,17 @@ class AnymalTerrainTask(RLTask):
                                                   self.Kd_factor_range[1] - self.Kd_factor_range[0]) + self.Kd_factor_range[0]
     
     def _randomize_gravity(self):
-        if self._task_cfg["env"]["randomizationRanges"]["randomizeGravity"]:
-            external_force = torch.rand(3, dtype=torch.float, device=self.device,
-                                    requires_grad=False) * (self.gravity_range[1] - self.gravity_range[0]) + self.gravity_range[0]
-            self.gravities[:, :] = external_force.unsqueeze(0)
+        
+        external_force = torch.rand(3, dtype=torch.float, device=self.device,
+                                requires_grad=False) * (self.gravity_range[1] - self.gravity_range[0]) + self.gravity_range[0]
+        self.gravities[:, :] = external_force.unsqueeze(0)
         gravity = self.gravities[0, :] + torch.Tensor([0, 0, -9.8]).to(self.device)
         self.gravity_vec[:, :] = gravity.unsqueeze(0) / torch.norm(gravity)
         self.world._physics_sim_view.set_gravity(
             carb.Float3(gravity[0], gravity[1], gravity[2])
         )
 
-    def _set_mass(self, view, env_ids, distribution="uniform" , operation="additive"):
+    def _set_mass(self, view, env_ids):
         """Update material properties for a given asset."""
 
         masses = self.default_base_masses
@@ -657,7 +667,7 @@ class AnymalTerrainTask(RLTask):
         print("Dynamic friction coefficients:", self.dynamic_friction_coeffs)
         print("Restitutions:", self.restitutions)
 
-    def _set_coms(self, view, env_ids, distribution="uniform" , operation="additive"):
+    def _set_coms(self, view, env_ids):
         """Update material properties for a given view."""
 
         coms, ori = view.get_coms()
@@ -674,7 +684,7 @@ class AnymalTerrainTask(RLTask):
         print(f"Coms updated: {coms}")
 
 
-    def set_compliance(self, env_ids=None, device="cpu", sync=False):
+    def set_compliance(self, env_ids=None, sync=False):
         """
         Sets compliant-contact stiffness and damping for each env in `env_ids`.
         - If `self.compliance[env]` is True, the values are sampled from the given self.stiffness_range.
@@ -854,7 +864,7 @@ class AnymalTerrainTask(RLTask):
                 attr   = getter()
                 # only set if the attribute actually exists on this material
                 if attr and attr.Get() is not None:
-                    attr.Set(sampled_values)
+                    attr.Set(sample_val)
                     self._particle_cfg[system_name][param_name] = sample_val
 
             print(f"[INFO] Updated PBD material at {pbd_material_path} with randomized parameters.")
@@ -1004,8 +1014,7 @@ class AnymalTerrainTask(RLTask):
             self._set_coms(self._anymals._base, env_ids=env_ids)
         if self._task_cfg["env"]["randomizationRanges"]["randomizeFriction"]:
             self._set_friction(self._anymals._foot, env_ids=env_ids)
-        if self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["enabled"]:
-            self.randomize_pbd_material()
+
 
         self._prepare_reward_function()
 
@@ -1032,7 +1041,6 @@ class AnymalTerrainTask(RLTask):
 
     def reset_idx(self, env_ids):
         indices = env_ids.to(dtype=torch.int32)
-
         positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
         velocities = torch_rand_float(-0.5, 0.5, (len(env_ids), self.num_dof), device=self.device)
 
@@ -1189,11 +1197,13 @@ class AnymalTerrainTask(RLTask):
             self.refresh_net_contact_force_tensors()
 
             self.common_step_counter += 1
-            if self.common_step_counter % self.push_interval == 0:
+            if self.push_enabled and (self.common_step_counter % self.push_interval) == 0:
                 self.push_robots()
-            if self.common_step_counter % self.gravity_randomize_interval == 0:
+            if  self.randomize_gravity and (self.common_step_counter % self.gravity_randomize_interval) == 0:
                 self._randomize_gravity()
-            
+            if self.randomize_pbd and (self.common_step_counter % self.randomize_pbd_interval == 0):
+                self.randomize_pbd_material()
+
             # prepare quantities
             self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])
             self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 3:6])
@@ -1203,9 +1213,9 @@ class AnymalTerrainTask(RLTask):
             self.commands[:, 2] = torch.clip(0.5 * wrap_to_pi(self.commands[:, 3] - heading), -1.0, 1.0)
 
             if self.measure_heights:
-                self.get_heights_below_foot()
                 if self._particles_active:
                     self.query_top_particle_positions() 
+                self.get_heights_below_foot()
 
             self.check_termination()
             self.compute_reward()
@@ -1237,29 +1247,30 @@ class AnymalTerrainTask(RLTask):
         self.reset_buf = self.has_fallen.clone()
         self.reset_buf = torch.where(self.timeout_buf.bool(), torch.ones_like(self.reset_buf), self.reset_buf)
         
-        # # Convert each robot's base (x,y) position into heightfield indices
-        # hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
-        # hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
-        # # Define a small distance buffer for early reset
-        # buffer = 0.0  # adjust this value based on your setup
-        # # Check if the robot is outside the "safe" bounds with the buffer:
-        # out_of_bounds = (
-        #     (hf_x < self.bx_start + buffer) |
-        #     (hf_x > self.bx_end - buffer)  |
-        #     (hf_y < self.by_start + buffer) |
-        #     (hf_y > self.by_end - buffer)
-        # )
 
-        # # Instead of marking them to reset, teleport them back to spawn:
-        # teleport_env_ids = out_of_bounds.nonzero(as_tuple=False).flatten()
-        # if teleport_env_ids.numel() > 0:
-        #     self.base_pos[teleport_env_ids] = self.base_init_state[0:3]
-        #     self.base_pos[teleport_env_ids, 0:3] += self.env_origins[teleport_env_ids]
-        #     self.base_pos[teleport_env_ids, 0:2] += torch_rand_float(-1., 1., (len(teleport_env_ids), 2), device=self.device)
-        #     indices = teleport_env_ids.to(dtype=torch.int32)
-        #     self._anymals.set_world_poses(
-        #     positions=self.base_pos[teleport_env_ids].clone(), orientations=self.base_quat[teleport_env_ids].clone(), indices=indices
-        # )
+        if self.teleport_active:
+            # Convert each robot's base (x,y) position into heightfield indices
+            hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
+            hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
+            # Define a small distance buffer for early reset
+            # Check if the robot is outside the "safe" bounds with the buffer:
+            out_of_bounds = (
+                (hf_x < self.bx_start + self.teleport_buffer) |
+                (hf_x > self.bx_end - self.teleport_buffer)  |
+                (hf_y < self.by_start + self.teleport_buffer) |
+                (hf_y > self.by_end - self.teleport_buffer)
+            )
+
+            # Instead of marking them to reset, teleport them back to spawn:
+            teleport_env_ids = out_of_bounds.nonzero(as_tuple=False).flatten()
+            if teleport_env_ids.numel() > 0:
+                self.base_pos[teleport_env_ids] = self.base_init_state[0:3]
+                self.base_pos[teleport_env_ids, 0:3] += self.env_origins[teleport_env_ids]
+                self.base_pos[teleport_env_ids, 0:2] += torch_rand_float(-1., 1., (len(teleport_env_ids), 2), device=self.device)
+                indices = teleport_env_ids.to(dtype=torch.int32)
+                self._anymals.set_world_poses(
+                positions=self.base_pos[teleport_env_ids].clone(), orientations=self.base_quat[teleport_env_ids].clone(), indices=indices
+            )
             
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, which will be called to compute the total reward.
@@ -1317,16 +1328,7 @@ class AnymalTerrainTask(RLTask):
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
 
-    def get_scale_shift(self, rng):
-        rng_tensor = torch.tensor(rng, dtype=torch.float, device=self.device)
-        # Check if the range is degenerate (both elements are the same)
-        if rng_tensor[1] == rng_tensor[0]:
-            scale = 0.0
-            shift = rng_tensor[0]  # or you could use rng_tensor[1] since they're equal
-        else:
-            scale = 2.0 / (rng_tensor[1] - rng_tensor[0])
-            shift = (rng_tensor[1] + rng_tensor[0]) / 2.0
-        return scale, shift
+
 
     def get_observations(self):
         """
@@ -1432,7 +1434,16 @@ class AnymalTerrainTask(RLTask):
         heights = torch.min(heights, heights3)
         self.measured_heights = heights.view(self.num_envs, -1) * self.terrain.vertical_scale
  
-
+    def get_scale_shift(self, rng):
+        rng_tensor = torch.tensor(rng, dtype=torch.float, device=self.device)
+        # Check if the range is degenerate (both elements are the same)
+        if rng_tensor[1] == rng_tensor[0]:
+            scale = 0.0
+            shift = rng_tensor[0]  # or you could use rng_tensor[1] since they're equal
+        else:
+            scale = 2.0 / (rng_tensor[1] - rng_tensor[0])
+            shift = (rng_tensor[1] + rng_tensor[0]) / 2.0
+        return scale, shift
     
     #------------ reward functions----------------
     def _reward_lin_vel_z(self):
@@ -1904,12 +1915,10 @@ class AnymalTerrainTask(RLTask):
                 particle_mask = mask[:, idx]
                 if particle_mask.any():
                     top_z = np.min([particle_positions_np[particle_mask, 2].max(), self.terrain.vertical_scale])
-                    self.height_samples[i, j] = top_z
-                else:
-                    top_z = self.height_samples[i, j] * self.terrain.vertical_scale
+                    self.height_samples[i, j] = int(round(top_z / self.terrain.vertical_scale))
 
                 if visualize:
-                    positions.append(Gf.Vec3f(cell_x[idx], cell_y[idx], float(top_z)))
+                    positions.append(Gf.Vec3f(cell_x[idx], cell_y[idx], float(self.height_samples[i, j])))
                     proto_indices.append(0)
 
         if visualize:
@@ -1959,7 +1968,7 @@ class AnymalTerrainTask(RLTask):
             sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(0.0, 1.0, 0.0)])  # green for clarity
 
 
-    def _visualize_height_scans(self):
+    def _init_height_scan_instancer(self):
         """
         Visualizes the height-scan points more efficiently by using a single PointInstancer
         to display all the debug spheres instead of creating/updating individual prims.
@@ -1988,7 +1997,7 @@ class AnymalTerrainTask(RLTask):
                 prim_path=point_instancer_path,
                 attributes={}
             )
-        point_instancer = UsdGeom.PointInstancer(self._stage.GetPrimAtPath(point_instancer_path))
+        self._height_scan_instancer = UsdGeom.PointInstancer(self._stage.GetPrimAtPath(point_instancer_path))
 
         # 3) Create/ensure a single prototype sphere (with a small radius)
         prototype_path = f"{point_instancer_path}/prototype_Sphere"
@@ -2001,37 +2010,37 @@ class AnymalTerrainTask(RLTask):
                 attributes={"radius": 0.02},
             )
         # Make sure the PointInstancer references the prototype
-        if len(point_instancer.GetPrototypesRel().GetTargets()) == 0:
-            point_instancer.GetPrototypesRel().AddTarget(prototype_path)
+        if len(self._height_scan_instancer.GetPrototypesRel().GetTargets()) == 0:
+            self._height_scan_instancer.GetPrototypesRel().AddTarget(prototype_path)
 
-        # 4) Accumulate the sphere positions (and assign a prototype index of 0 for all)
-        positions = []
-        proto_indices = []
-        height_px_flat      = self.height_px.flatten()
-        height_py_flat      = self.height_py.flatten()
-        measured_heights_flat = self.measured_heights.flatten()
-
-        num_points = self.num_envs * self._num_height_points
-        for idx in range(num_points):
-            # Compute world x and y from grid indices
-            world_x = height_px_flat[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size
-            world_y = height_py_flat[idx].item() * self.terrain.horizontal_scale - self.terrain.border_size
-            # Look up the measured height at the grid cell and convert to world units
-            measured_z = measured_heights_flat[idx].item()
-            positions.append(Gf.Vec3f(world_x, world_y, measured_z))
-            proto_indices.append(0)
-
-
-        positions_array = Vt.Vec3fArray(positions)
-        proto_indices_array = Vt.IntArray(proto_indices)
-
-        # 5) Update the PointInstancer with the positions and prototype indices
-        point_instancer.CreatePositionsAttr().Set(positions_array)
-        point_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)
-
-        # 6) (Optional) Set a debug color on the prototype sphere
+        # 6) Set a debug color on the prototype sphere
         sphere_geom = UsdGeom.Sphere(self._stage.GetPrimAtPath(prototype_path))
         sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
+        
+    def _visualize_height_scans(self):
+        # lazy init
+        if not hasattr(self, "_height_scan_instancer"):
+            self._init_height_scan_instancer()
+
+        px      = self.height_px.flatten()
+        py      = self.height_py.flatten()
+        pz = self.measured_heights.flatten()
+        # compute world coords in bulk
+        hscale = self.terrain.horizontal_scale
+        bsize  = self.terrain.border_size
+        xs = px * hscale - bsize
+        ys = py * hscale - bsize
+        # build one Vec3fArray
+        vecs = [Gf.Vec3f(x, y, z) for x, y, z in zip(xs, ys, pz)]
+        positions_array = Vt.Vec3fArray(vecs)
+        # proto indices all zero
+        proto_indices_array = Vt.IntArray([0] * len(vecs))
+
+        # 5) Update the PointInstancer with the positions and prototype indices
+        self._height_scan_instancer.CreatePositionsAttr().Set(positions_array)
+        self._height_scan_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)
+
+
 
 #------------ helper functions----------------
 
