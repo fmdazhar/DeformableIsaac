@@ -3,7 +3,7 @@ name: AnymalTerrain
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:512,${...num_envs}}
+  numEnvs: ${resolve_default:2048,${...num_envs}}
   
   priv_base: true
   priv_compliance: true
@@ -385,23 +385,14 @@ sim:
     max_depenetration_velocity: 100.0
 
     # # GPU buffers
-    # gpu_max_rigid_contact_count: 524288
-    # gpu_max_rigid_patch_count: 163840
+
     # gpu_found_lost_pairs_capacity: 4196352 #4194304
     # gpu_found_lost_aggregate_pairs_capacity: 234684416 #117463040 #33554432
-    # gpu_total_aggregate_pairs_capacity: 4194304
-    # gpu_max_soft_body_contacts: 1048576
-    # gpu_max_particle_contacts: 1048576
-    # gpu_heap_capacity: 134217728
-    # gpu_temp_buffer_capacity: 33554432
-    # gpu_max_num_partitions: 8
 
-
-    # GPU buffers
     gpu_max_rigid_contact_count: 524288
     gpu_max_rigid_patch_count: 163840
     gpu_found_lost_pairs_capacity: 4194304
-    gpu_found_lost_aggregate_pairs_capacity: 33554432
+    gpu_found_lost_aggregate_pairs_capacity: 111111168 #33554432
     gpu_total_aggregate_pairs_capacity: 4194304
     gpu_max_soft_body_contacts: 1048576
     gpu_max_particle_contacts: 1048576

@@ -165,8 +165,8 @@ class AnymalTerrainTask(RLTask):
         self.Kp = self._task_cfg["env"]["control"]["stiffness"]
         self.Kd = self._task_cfg["env"]["control"]["damping"]
         self.curriculum = self._task_cfg["env"]["terrain"]["curriculum"]
-        self.teleport_active = self._task_cfg["env"]["learn"]["teleportActive"]
-        self.teleport_buffer = self._task_cfg["env"]["learn"]["teleportBuffer"]
+        self.teleport_active = self._task_cfg["env"]["terrain"]["teleportActive"]
+        self.teleport_buffer = self._task_cfg["env"]["terrain"]["teleportBuffer"]
         self.measure_heights = self._task_cfg["env"]["terrain"]["measureHeights"]
 
         self.base_threshold = 0.2
@@ -965,7 +965,6 @@ class AnymalTerrainTask(RLTask):
 
         _prim_paths = find_matching_prim_paths(self._anymals._foot_material_path)
         count = len(_prim_paths)
-        print(f"Found {count} prims for foot material API")
         self._prims = [get_prim_at_path(path) for path in _prim_paths]
         self._material_apis = [None] * count
 
@@ -1060,17 +1059,17 @@ class AnymalTerrainTask(RLTask):
         if self.curriculum:
             jitter_x = jitter_y = 1.0
         else:
-            jitter_x = self.terrain.env_rows * self.terrain.env_length * 0.4
-            jitter_y = self.terrain.env_cols * self.terrain.env_width * 0.4
+            jitter_x = self.terrain.env_rows * self.terrain.env_length 
+            jitter_y = self.terrain.env_cols * self.terrain.env_width 
             
         # generate an N×1 tensor, then squeeze to (N,)
         rand_x = torch_rand_float(
-            -jitter_x, jitter_x,
+            0, jitter_x,
             (len(env_ids), 1),
             device=self.device
         ).squeeze(1)
         rand_y = torch_rand_float(
-            -jitter_y, jitter_y,
+            0, jitter_y,
             (len(env_ids), 1),
             device=self.device
         ).squeeze(1)
@@ -2012,7 +2011,7 @@ class AnymalTerrainTask(RLTask):
         # Make sure the PointInstancer references the prototype
         if len(self._height_scan_instancer.GetPrototypesRel().GetTargets()) == 0:
             self._height_scan_instancer.GetPrototypesRel().AddTarget(prototype_path)
-
+    
         # 6) Set a debug color on the prototype sphere
         sphere_geom = UsdGeom.Sphere(self._stage.GetPrimAtPath(prototype_path))
         sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
@@ -2031,7 +2030,8 @@ class AnymalTerrainTask(RLTask):
         xs = px * hscale - bsize
         ys = py * hscale - bsize
         # build one Vec3fArray
-        vecs = [Gf.Vec3f(x, y, z) for x, y, z in zip(xs, ys, pz)]
+        vecs = [Gf.Vec3f(float(x), float(y), float(z))
+           for x, y, z in zip(xs, ys, pz)]
         positions_array = Vt.Vec3fArray(vecs)
         # proto indices all zero
         proto_indices_array = Vt.IntArray([0] * len(vecs))
