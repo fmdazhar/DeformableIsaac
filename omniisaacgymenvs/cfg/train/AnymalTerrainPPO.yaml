@@ -7,12 +7,12 @@ policy:
   # Only include noise for leg actions (num_leg_actions = 12)
   # Using the first 12 values of the original init_std specification
   init_std: [0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0]
-  actor_hidden_dims: [128]
-  critic_hidden_dims: [128]
+  actor_hidden_dims: [512]
+  critic_hidden_dims: [512]
   activation: elu
   # Only leg-specific control head remains.
-  leg_control_head_hidden_dims: [128, 128]
-  priv_encoder_dims: [] #64, 20
+  leg_control_head_hidden_dims: [256, 128]
+  priv_encoder_dims: [128,128] #64, 20
   num_leg_actions: 12
 
 algorithm:
@@ -23,13 +23,14 @@ algorithm:
   num_learning_epochs: 5
   num_mini_batches: 4
   learning_rate: 2e-4 #1.e-3 #5.e-4
-  schedule: fixed #'adaptive'
+  schedule: adaptive #fixed #'adaptive'
   gamma: 0.99
   lam: 0.95
-  desired_kl: null #0.01
+  desired_kl: 0.01 #null #0.01
   max_grad_norm: 1.0
   # Update min_policy_std to match the action space (12 values)
   min_policy_std: [0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25]
+  use_history_encoding: true
   dagger_update_freq: 20
   priv_reg_coef_schedual: [0, 0, 3000, 7000]
 
@@ -39,9 +40,4 @@ runner:
   num_steps_per_env: 24
   max_iterations: 1500
   save_interval: 500
-  experiment_name: AnymalTerrain
-  run_name: ""
-  resume: false
-  load_run: -1
-  checkpoint: -1
-  resume_path: null
+
