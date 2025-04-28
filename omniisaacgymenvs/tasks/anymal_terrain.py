@@ -32,6 +32,11 @@ class AnymalTerrainTask(RLTask):
         self.custom_origins = False
         self.init_done = False
         self._env_spacing = 0.0
+
+        self._sim_config = sim_config
+        self._cfg = sim_config.config
+        self._task_cfg = sim_config.task_config
+        self._device = self._cfg["sim_device"]
         self.update_config(sim_config)
 
         self._num_actions = 12
@@ -45,7 +50,6 @@ class AnymalTerrainTask(RLTask):
         else:
             self._num_height_points = 0
         self._num_obs_history = self._obs_history_length * (self._num_proprio + self._num_height_points)
-
 
         # Then the final observation dimension is:
         self._num_observations = self._num_obs_history \
@@ -84,9 +88,7 @@ class AnymalTerrainTask(RLTask):
         return
 
     def update_config(self, sim_config):
-        self._sim_config = sim_config
-        self._cfg = sim_config.config
-        self._task_cfg = sim_config.task_config
+
 
         # normalization
         self.clip_obs = self._task_cfg["env"].get("clipObservations", np.Inf)
@@ -188,7 +190,7 @@ class AnymalTerrainTask(RLTask):
         self._particle_cfg = self._task_cfg["env"]["terrain"]["particles"]
 
         self.terrain = Terrain(self._task_cfg["env"]["terrain"])
-        self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float)
+        self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float, device=self.device)
 
         self._particles_active = (self.terrain_details[:, 5] > 0).any().item()
         self._compliance_active = (self.terrain_details[:, 6] > 0).any().item()
@@ -251,14 +253,15 @@ class AnymalTerrainTask(RLTask):
             self.pbd_by_sys[sys_name] = local
             
         self.pbd_param_names = sorted(merged.keys())
+        self.pbd_range = [merged[k] for k in self.pbd_param_names]
         self.pbd_param_names += ["particles_present", "fluid_present"]
+        self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
 
         self.pbd_parameters = torch.zeros((self.num_envs, len(self.pbd_param_names)),
                                            dtype=torch.float32,
                                            device=self.device)
         self._pbd_idx = {name: i for i, name in enumerate(self.pbd_param_names)}
-        self.pbd_range = [merged[k] for k in self.pbd_param_names]
-        self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
+
 
         scale_shift_pairs = [self.get_scale_shift(rng) for rng in self.pbd_range]
         scales, shifts = zip(*scale_shift_pairs)
@@ -322,7 +325,6 @@ class AnymalTerrainTask(RLTask):
         return points
 
     def _create_trimesh(self, create_mesh=True):
-        self.terrain_details = self.terrain_details.to(self.device) 
         self.terrain_origins = torch.from_numpy(self.terrain.env_origins).float().to(self.device)
         self.terrain_types = [int(l.item()) for l in torch.unique(self.terrain_details[:, 4])]
         vertices = self.terrain.vertices
@@ -399,79 +401,76 @@ class AnymalTerrainTask(RLTask):
 
 
     def update_terrain_level(self, env_ids):
-        """
-        Example version that:
-        - If we've just unlocked a new level (i.e., self.current_unlocked_level < self.highest_level),
-            then half of the env_ids go to the new level, half remain among lower levels.
-        - Once we have reached all levels unlocked, distribution among all 0..highest_level is random.
-        """
 
-        if not self.init_done:
-            # Skip terrain update on the very first reset if you like, or keep minimal logic
-            return
+        if self.init_done:
 
-        # For each currently represented level, check performance
-        current_levels = self.terrain_levels[env_ids]
-        unique_levels, inverse_idx = torch.unique(current_levels, return_inverse=True)
-        # Threshold for leveling up
-        threshold = 0.8
+            # For each currently represented level, check performance
+            current_levels = self.terrain_levels[env_ids]
+            unique_levels, inverse_idx = torch.unique(current_levels, return_inverse=True)
+            # Threshold for leveling up
+            threshold = 0.8
 
-        # Promote envs whose recent tracking velocity exceeds threshold
-        for lvl in unique_levels:
-            # Indices of env_ids in this level
-            mask = (current_levels == lvl)
-            level_envs = env_ids[mask]
-            if level_envs.numel() == 0:
-                continue
-            # Compute mean over the stored history
-            mean_reward = self.tracking_lin_vel_x_history[level_envs].mean()
-
-            # If above threshold and not at max, bump their level
-            if mean_reward > threshold:
+            # Promote envs whose recent tracking velocity exceeds threshold
+            for lvl in unique_levels:
+                if lvl >= self.highest_level:
+                # already at max, optionally randomize or skip
+                    continue
+                # Indices of env_ids in this level
+                mask = (current_levels == lvl)
+                level_envs = env_ids[mask]
+                if level_envs.numel() == 0:
+                    continue
                 self.terrain_levels[level_envs] = lvl + 1
+                print(f"Leveling up envs {level_envs} from {lvl} to {lvl + 1}")
+                # # Compute mean over the stored history
+                # mean_reward = self.tracking_lin_vel_x_history[level_envs].mean()
 
-        if self.current_unlocked_level >= self.highest_level:
-            # Once all levels are unlocked, we just do random among ALL levels [0..highest_level]
-            self.terrain_levels[env_ids] = torch.randint(
-                low=0,
-                high=self.highest_level + 1,  # +1 because torch.randint's high is exclusive
-                size=(len(env_ids),),
-                device=self.device,
-            )
+                # # If above threshold and not at max, bump their level
+                # if mean_reward > threshold:
+                #     self.terrain_levels[level_envs] = lvl + 1
 
-        # For any envs that have reached highest_level, allow random levels
-        at_max = (self.terrain_levels[env_ids] == self.highest_level)
-        if at_max.any():
-            max_envs = env_ids[at_max]
-            # sample random levels between 0 and highest_level inclusive
-            self.terrain_levels[max_envs] = torch.randint(
-                low=0,
-                high=self.highest_level + 1,
-                size=(len(max_envs),),
-                device=self.device,
-            )
+        new_levels = self.terrain_levels[env_ids]
+        # over_max  = new_levels > self.highest_level
+        # if over_max.any():
+        #     envs_to_rand = env_ids[over_max]
+        #     self.terrain_levels[envs_to_rand] = torch.randint(
+        #         low=0,
+        #         high=self.highest_level + 1,
+        #         size=(envs_to_rand.shape[0],),
+        #         device=self.device,
+        #     )
+
+        # # For any envs that have reached highest_level, allow random levels
+        # at_max = (self.terrain_levels[env_ids] == self.highest_level)
+        # if at_max.any():
+        #     max_envs = env_ids[at_max]
+        #     # sample random levels between 0 and highest_level inclusive
+        #     self.terrain_levels[max_envs] = torch.randint(
+        #         low=0,
+        #         high=self.highest_level + 1,
+        #         size=(len(max_envs),),
+        #         device=self.device,
+        #     )
         
-        unique_levels, inverse_idx = torch.unique(current_levels, return_inverse=True)
+        unique_levels, inverse_idx = torch.unique(new_levels, return_inverse=True)
         for i, lvl in enumerate(unique_levels):
             # Get which envs in env_ids map to this terrain level
             group = env_ids[inverse_idx == i]
+            if group.numel() == 0:
+                continue
+
             # Rows for this level
             candidate_indices = self._terrains_by_level[lvl.item()]
             n_envs   = group.shape[0]
             n_cands = candidate_indices.shape[0]
-            idxs = torch.arange(n_cands, device=self.device) % n_envs
+            idxs = torch.arange(n_envs, device=self.device) % n_cands
             chosen_rows = candidate_indices[idxs]
-
-            # bounding boxes, environment origins, PBD or compliance, etc.
             self.bx_start[group] = self.terrain_details[chosen_rows, 10]
             self.bx_end[group]   = self.terrain_details[chosen_rows, 11]
             self.by_start[group] = self.terrain_details[chosen_rows, 12]
             self.by_end[group]   = self.terrain_details[chosen_rows, 13]
-
             self.compliance[group]  = self.terrain_details[chosen_rows, 6].bool()
             self.system_idx[group]  = self.terrain_details[chosen_rows, 7].long()
-
-            # (row, col) -> environment origins
             rows = self.terrain_details[chosen_rows, 2].long()
             cols = self.terrain_details[chosen_rows, 3].long()
             self.env_origins[group] = self.terrain_origins[rows, cols]
@@ -988,8 +987,6 @@ class AnymalTerrainTask(RLTask):
 
         # Determine the highest terrain level from the terrain details.
         self.highest_level = int(self.terrain_details[:, 1].max().item())
-        # Track how many levels we have unlocked so far. Start with 0 (or 1, depending on your preference).
-        self.current_unlocked_level = 0
 
         # Get joint limits
         dof_limits = self._anymals.get_dof_limits()
@@ -1035,9 +1032,9 @@ class AnymalTerrainTask(RLTask):
         self.ep_length_history_full = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.reset_idx(env_ids)
-        
         self.init_done = True
 
+        
     def reset_idx(self, env_ids):
         indices = env_ids.to(dtype=torch.int32)
         positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
@@ -1093,6 +1090,12 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_joint_positions(positions=self.dof_pos[env_ids].clone(), indices=indices)
         self._anymals.set_joint_velocities(velocities=self.dof_vel[env_ids].clone(), indices=indices)
 
+        # Print environment origins and levels for each reset
+        for env in env_ids:
+            origin = self.env_origins[env].cpu().tolist()
+            level = int(self.terrain_levels[env].item())
+            print(f"[Reset] Env {env.item()} - Origin: {origin}, Level: {level}")
+
         self.commands[env_ids, 0] = torch_rand_float(
             self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device
         ).squeeze()
@@ -1117,26 +1120,26 @@ class AnymalTerrainTask(RLTask):
         lin_x_rewards = self.episode_sums["tracking_lin_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
         ang_x_rewards = self.episode_sums["tracking_ang_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
         final_lengths = self.progress_buf[env_ids]  / self.max_episode_length_s     # Update history buffer for each environment
-        for i, env_id in enumerate(env_ids):
-            idx = self.tracking_lin_vel_x_history_idx[env_id] % self.tracking_history_len
-            self.tracking_lin_vel_x_history[env_id, idx] = lin_x_rewards[i]
-            self.tracking_lin_vel_x_history_idx[env_id] = (idx + 1) % self.tracking_history_len
-            # Optionally check if the buffer is “full” now
-            if (idx + 1) % self.tracking_history_len == 0:
-                self.tracking_lin_vel_x_history_full[env_id] = True
 
-            idx_ang = self.tracking_ang_vel_x_history_idx[env_id] % self.tracking_history_len
-            self.tracking_ang_vel_x_history[env_id, idx_ang] = ang_x_rewards[i]
-            self.tracking_ang_vel_x_history_idx[env_id] = (idx_ang + 1) % self.tracking_history_len
-            # Optionally check if the buffer is “full” now
-            if (idx_ang + 1) % self.tracking_history_len == 0:
-                self.tracking_ang_vel_x_history_full[env_id] = True
+        # 1. current write positions for every env we’re resetting
+        lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
+        ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
+        len_pos = self.ep_length_history_idx[env_ids]      % self.tracking_history_len   # episode length
 
-            idx_len = self.ep_length_history_idx[env_id] % self.tracking_history_len
-            self.ep_length_history[env_id, idx_len] = final_lengths[i]
-            self.ep_length_history_idx[env_id] = (idx_len + 1) % self.tracking_history_len
-            if (idx_len + 1) % self.tracking_history_len == 0:
-                self.ep_length_history_full[env_id] = True
+        # 2. write the new values
+        self.tracking_lin_vel_x_history[env_ids, lin_pos] = lin_x_rewards                 # (N,)
+        self.tracking_ang_vel_x_history[env_ids, ang_pos] = ang_x_rewards                 # (N,)
+        self.ep_length_history      [env_ids, len_pos] = final_lengths                    # (N,)
+
+        # 3. advance the circular indices (modulo history length)
+        self.tracking_lin_vel_x_history_idx[env_ids] = (lin_pos + 1) % self.tracking_history_len
+        self.tracking_ang_vel_x_history_idx[env_ids] = (ang_pos + 1) % self.tracking_history_len
+        self.ep_length_history_idx      [env_ids] = (len_pos + 1) % self.tracking_history_len
+
+        # 4. mark a buffer as ‘full’ the first time it wraps around
+        self.tracking_lin_vel_x_history_full[env_ids] |= (self.tracking_lin_vel_x_history_idx[env_ids] == 0)
+        self.tracking_ang_vel_x_history_full[env_ids] |= (self.tracking_ang_vel_x_history_idx[env_ids] == 0)
+        self.ep_length_history_full      [env_ids] |= (self.ep_length_history_idx      [env_ids] == 0)
 
         for key in self.episode_sums.keys():      
             self.episode_sums[key][env_ids] = 0.0
@@ -1286,6 +1289,13 @@ class AnymalTerrainTask(RLTask):
                 self.reward_scales.pop(key) 
             else:
                 self.reward_scales[key] *= self.dt
+
+        self.inactive_reward_names = [
+            name
+            for name in self.all_reward_methods
+            if name not in self.reward_scales
+        ]
+
         # prepare list of functions
         self.reward_functions = []
         self.reward_names = []
@@ -1296,11 +1306,19 @@ class AnymalTerrainTask(RLTask):
             name = '_reward_' + name
             self.reward_functions.append(getattr(self, name))
 
-        # Initialize episode_sums for *all* rewards (zeroed)
-        self.episode_sums = {
-            name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
-            for name in self.all_reward_methods
-        }
+        # 5) Initialize episode_sums _dict_ before populating it
+        self.episode_sums = {}
+        # active rewards
+        for name in self.reward_names:
+            self.episode_sums[name] = torch.zeros(
+                self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
+            )
+
+        # inactive rewards, prefixed
+        for name in self.inactive_reward_names:
+            self.episode_sums[f"inactive_{name}"] = torch.zeros(
+                self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
+            )
 
     def compute_reward(self):
         """ Compute rewards
@@ -1308,17 +1326,17 @@ class AnymalTerrainTask(RLTask):
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
-
-        # Log raw values for every reward
-        for name in self.all_reward_methods:
-            raw = getattr(self, f'_reward_{name}')()
-            self.episode_sums[name] += raw * self.dt
+        # 1) log inactive rewards under “inactive_<name>”
+        for name in self.inactive_reward_names:
+            raw = getattr(self, f"_reward_{name}")()
+            # e.g. store in extras or episode_sums:
+            self.episode_sums[f"inactive_{name}"] = raw * self.dt
 
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             rew = self.reward_functions[i]() * self.reward_scales[name]
             self.rew_buf += rew
-            # self.episode_sums[name] += rew
+            self.episode_sums[name] += rew
         if self.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         # add termination reward after clipping

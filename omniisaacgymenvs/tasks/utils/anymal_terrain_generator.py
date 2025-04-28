@@ -150,7 +150,6 @@ class Terrain:
                     ly0,
                     ly1,
                     fluid,
-                    name
                 ))
 
     @staticmethod

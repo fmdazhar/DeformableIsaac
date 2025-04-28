@@ -98,7 +98,7 @@ class RLGTrainer:
             policy = runner.get_inference_policy(device=device)
             first_frame = True
             step_counter = 0
-            num_episodes = 2
+            num_episodes = 10
             max_steps = num_episodes * int(env.max_episode_length)
             print(f"Running test for {max_steps} steps.")
             x_vel_cmd = torch.tensor([1.0], device=device)
@@ -209,11 +209,11 @@ def parse_hydra_configs(cfg: DictConfig):
     # Optionally override config values in test mode:
     if cfg.test:
         # Overwrite specific config entries for test scenarios:
-        cfg.task.env.numEnvs = 128
+        cfg.task.env.numEnvs = 8
         cfg.task.env.terrain.numLevels = 10
         cfg.task.env.terrain.numTerrains = 10
 
-        cfg.task.env.terrain.curriculum = False
+        cfg.task.env.terrain.curriculum = True
         cfg.task.env.commands.VelocityCurriculum = False
         cfg.task.env.terrain.terrain_types = 1
 
@@ -224,6 +224,16 @@ def parse_hydra_configs(cfg: DictConfig):
                 "compliant": False,
                 "count": 2,
                 "level": 0
+            },
+            {
+                "name": "central_depression_terrain",
+                "compliant": True,
+                "count": 2,
+                "level": 1,
+                "particle_present": True,
+                "system": 1,
+                "depth": 0.13,
+                "size": 4
             }
         ]
         cfg.task.env.learn.addNoise = False
