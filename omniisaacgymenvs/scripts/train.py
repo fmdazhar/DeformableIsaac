@@ -215,7 +215,7 @@ def parse_hydra_configs(cfg: DictConfig):
 
         cfg.task.env.terrain.curriculum = True
         cfg.task.env.commands.VelocityCurriculum = False
-        cfg.task.env.terrain.terrain_types = 1
+        cfg.task.env.terrain.teleportActive = True
 
         cfg.task.env.terrain.terrain_types = [
             {

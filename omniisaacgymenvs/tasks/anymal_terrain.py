@@ -1216,7 +1216,7 @@ class AnymalTerrainTask(RLTask):
 
             if self.measure_heights:
                 if self._particles_active:
-                    self.query_top_particle_positions() 
+                    self.query_top_particle_positions(visualize=True) 
                 self.get_heights_below_foot()
 
             self.check_termination()
@@ -1865,7 +1865,8 @@ class AnymalTerrainTask(RLTask):
         stage = self._stage
         # Determine which levels to process: either the given level or all levels present
         levels_to_process = list(self.particle_instancers_by_level.keys())
-
+        positions = []
+        proto_indices = []
         # Iterate each level and its systems
         for lvl in levels_to_process:
             env_ids = (self.terrain_levels == lvl).nonzero(as_tuple=False).flatten()
@@ -1878,16 +1879,15 @@ class AnymalTerrainTask(RLTask):
                 prim = stage.GetPrimAtPath(inst_path)
                 if not prim.IsValid():
                     continue
-                positions = UsdGeom.PointInstancer(prim).GetPositionsAttr().Get() or Vt.Vec3fArray()
-                if positions:
-                    all_positions.append(np.array(positions))
+                position = UsdGeom.PointInstancer(prim).GetPositionsAttr().Get() or Vt.Vec3fArray()
+                if position:
+                    all_positions.append(np.array(position))
 
             if not all_positions:
                 continue
 
             particle_positions_np = np.vstack(all_positions)
-            positions = []
-            proto_indices = []
+
 
             foot_positions = self.foot_pos.view(self.num_envs, 4, 3)  
             if env_ids is not None:
@@ -1931,7 +1931,7 @@ class AnymalTerrainTask(RLTask):
             for idx, (i, j) in enumerate(unique_grid_indices):
                 particle_mask = mask[:, idx]
                 if particle_mask.any():
-                    top_z = np.min([particle_positions_np[particle_mask, 2].max(), self.terrain.vertical_scale])
+                    top_z = np.min([particle_positions_np[particle_mask, 2].max(), 0])
                     self.height_samples[i, j] = int(round(top_z / self.terrain.vertical_scale))
 
                 if visualize:
