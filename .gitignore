@@ -1,6 +1,6 @@
 __pycache___
 __pycache__/
 runs
-omniisaacgymenvs.egg-info/
+leggeedisaacgymenvs.egg-info/
 checkpoints
-omniisaacgymenvs/**/wandb/
+leggeedisaacgymenvs/**/wandb/

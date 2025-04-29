@@ -10,7 +10,6 @@ category = "Simulation"
 title = "Isaac Gym Envs"
 description = "RL environments"
 authors = ["Isaac Sim Team"]
-repository = "https://gitlab-master.nvidia.com/carbon-gym/omniisaacgymenvs"
 keywords = ["isaac"]
 changelog = "docs/CHANGELOG.md"
 readme = "docs/README.md"
@@ -24,4 +23,4 @@ writeTarget.kit = true
 "omni.isaac.ml_archive" = {} # torch
 
 [[python.module]]
-name = "omniisaacgymenvs"
+name = "leggeedisaacgymenvs"
