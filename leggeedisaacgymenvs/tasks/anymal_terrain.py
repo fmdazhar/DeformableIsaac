@@ -208,7 +208,7 @@ class AnymalTerrainTask(RLTask):
         self._num_priv = (
             (28 if self.priv_base else 0)
         + (8  if (self._compliance_active and self.priv_compliance) else 0)
-        + (len(self.pbd_parameters) if self.pbd_parameters is not None else 0)
+        + (self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0)
         )
         print(f"Num priv: {self._num_priv}")
     
@@ -299,7 +299,7 @@ class AnymalTerrainTask(RLTask):
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
         num_points = grid_x.numel()
         base = torch.stack([grid_x.flatten(), grid_y.flatten(),
-                        torch.zeros(num_points, device=self.device)], dim=1)  # (9,3)
+                        torch.zeros(num_points, device=self.device)], dim=1) 
         foot_offsets = base.repeat(4, 1)
         self._num_height_points = foot_offsets.shape[0] 
         points = foot_offsets.unsqueeze(0).repeat(self.num_envs, 1, 1)        
@@ -768,14 +768,13 @@ class AnymalTerrainTask(RLTask):
         In this example, we store 8 different PBD material parameters per row:
         [friction, damping, viscosity, density, surface_tension, cohesion, adhesion, cfl_coefficient].
         """
+        if self.pbd_parameters is None:
+            return
         # default to all envs
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
         else:
             env_ids = env_ids.to(self.device)
-
-        if len(env_ids) == 0:
-            return
 
         # Make sure self.pbd_parameters has the right shape:
         # e.g. self.pbd_parameters = torch.zeros((self.num_envs, 8), device=self.device)
@@ -1301,7 +1300,15 @@ class AnymalTerrainTask(RLTask):
         """
 
         # 1) Discover all reward methods
-        self.all_reward_methods = [name[8:] for name in dir(self) if name.startswith('_reward_')]
+        all_methods = [name[8:] for name in dir(self) if name.startswith('_reward_')]
+
+        if not self.measure_heights:
+            self.reward_scales.pop("base_height", None)
+
+        # 2) If base_height isn’t active, remove it from the list too
+        if not self.measure_heights and "base_height" in all_methods:
+            all_methods.remove("base_height")
+        self.all_reward_methods = all_methods
 
         # remove zero scales + multiply non-zero ones by dt
         for key in list(self.reward_scales.keys()):
@@ -1447,6 +1454,12 @@ class AnymalTerrainTask(RLTask):
                 final_obs_no_history.unsqueeze(1)          # append newest
             ], dim=1)
         )
+        # print("  P (proprio+height):", final_obs_no_history.shape[1])
+        # print("  Q (privileged)      :", priv_buf.shape[1])
+        # print("  H (history)         :", self.obs_history_buf.shape[1] * self.obs_history_buf.shape[2])
+        # print("  Total real obs dim  :", final_obs_no_history.shape[1] + priv_buf.shape[1] + 
+        #                                 self.obs_history_buf.shape[1] * self.obs_history_buf.shape[2])
+        # print("  _num_observations   :", self._num_observations)
 
     def get_heights_below_foot(self, env_ids=None):
 

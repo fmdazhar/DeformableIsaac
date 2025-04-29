@@ -30,7 +30,7 @@ env:
       tracking_eps_length: 0.9
 
   terrain:
-    measureHeights: True
+    measureHeights: False
     staticFriction: 1.0 # [-]
     dynamicFriction: 1.0 # [-]
     restitution: 0. # [-]
