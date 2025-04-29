@@ -1153,6 +1153,7 @@ class AnymalTerrainTask(RLTask):
         self.obs_history_buf[env_ids, :, :] = 0.   
 
         self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
+        self.extras["episode"]["time_outs"] = self.timeout_buf
         self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
         self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
         self.extras["episode"]["min_command_y_vel"]   = torch.min(self.commands[:, 1])
