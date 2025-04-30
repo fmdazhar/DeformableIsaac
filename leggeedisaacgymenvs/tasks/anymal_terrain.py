@@ -40,7 +40,7 @@ class AnymalTerrainTask(RLTask):
         self.update_config()
 
         self._num_actions = 12
-        self._num_proprio = 48 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 
+        self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4
         self._num_privileged_observations = None
         # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
@@ -72,7 +72,7 @@ class AnymalTerrainTask(RLTask):
         else:
             self.measured_heights = None
         
-
+        self._start_randomized = False
         # Initialize dictionaries to track created particle systems and materials
         self.created_particle_systems = {}
         self.created_materials = {}
@@ -163,6 +163,9 @@ class AnymalTerrainTask(RLTask):
         self.randomize_pbd_interval = int(self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["particles"]["interval"] / self.dt + 0.5)
         self.randomize_gravity = self._task_cfg["env"]["randomizationRanges"]["randomizeGravity"]
         self.gravity_randomize_interval = int(self._task_cfg["env"]["randomizationRanges"]["gravityRandIntervalSecs"] / self.dt + 0.5)
+        self.randomize_episode_start = self._task_cfg["env"]["randomizationRanges"].get(
+        "randomizeEpisodeStart", False
+        )
         self.Kp = self._task_cfg["env"]["control"]["stiffness"]
         self.Kd = self._task_cfg["env"]["control"]["damping"]
         self.curriculum = self._task_cfg["env"]["terrain"]["curriculum"]
@@ -170,6 +173,7 @@ class AnymalTerrainTask(RLTask):
         self.teleport_buffer = self._task_cfg["env"]["terrain"]["teleportBuffer"]
         self.measure_heights = self._task_cfg["env"]["terrain"]["measureHeights"]
         self.debug_heights = self._task_cfg["env"]["terrain"]["debugHeights"]
+
 
         self.base_threshold = 0.2
         self.thigh_threshold = 0.1
@@ -207,7 +211,7 @@ class AnymalTerrainTask(RLTask):
             self.pbd_by_sys = {}
 
         self._num_priv = (
-            (28 if self.priv_base else 0)
+            (40 if self.priv_base else 0)
         + (8  if (self._compliance_active and self.priv_compliance) else 0)
         + (self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0)
         )
@@ -285,6 +289,7 @@ class AnymalTerrainTask(RLTask):
         noise_vec[12:24] = self._task_cfg["env"]["learn"]["dofPositionNoise"] * noise_level * self.dof_pos_scale
         noise_vec[24:36] = self._task_cfg["env"]["learn"]["dofVelocityNoise"] * noise_level * self.dof_vel_scale
         noise_vec[36:48] = 0.0  # previous actions
+        noise_vec[48:52] = 0.0 # contact force states
 
         return noise_vec
         
@@ -999,7 +1004,7 @@ class AnymalTerrainTask(RLTask):
 
         self.dof_vel_limits = self._anymals._physics_view.get_dof_max_velocities()[0].to(device=self._device)
         self.torque_limits = self._anymals._physics_view.get_dof_max_forces()[0].to(device=self._device)
-
+        self.saturation_effort = 33.5
         if self._task_cfg["env"]["randomizationRanges"]["randomizeAddedMass"]:
             self._set_mass(self._anymals._base, env_ids=env_ids)
         if self._task_cfg["env"]["randomizationRanges"]["randomizeCOM"]:
@@ -1087,14 +1092,21 @@ class AnymalTerrainTask(RLTask):
         self.base_pos[env_ids, 0] += rand_x
         self.base_pos[env_ids, 1] += rand_y
 
-        # rand_yaw = torch_rand_float(0, 2 * np.pi, (len(env_ids), 1), device=self.device)
-        # random_quat = torch.cat([
-        #     torch.cos(rand_yaw / 2),
-        #     torch.zeros(len(env_ids), 2, device=self.device),
-        #     torch.sin(rand_yaw / 2)
-        # ], dim=1)
-        # self.base_quat[env_ids] = random_quat 
-        self.base_quat[env_ids] = self.base_init_state[3:7]
+        orient_ranges = torch.tensor([
+            [-0.5,  0.5],    # roll
+            [-0.5,  0.5],    # pitch
+            [-3.14, 3.14],   # yaw
+        ], device=self.device)  # (3, 2)
+        rpy = sample_uniform(
+            orient_ranges[:, 0], 
+            orient_ranges[:, 1], 
+            (len(env_ids), 3), 
+            device=self.device
+        )  # shape: (N,3)
+        orient_delta = quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2])                    # (N,4)
+        base_q_init  = self.base_init_state[3:7]                                    # (N,4)
+        new_quats    = quat_mul(base_q_init, orient_delta)                        # (N,4)
+        self.base_quat[env_ids] = new_quats
 
         self.base_velocities[env_ids] = self.base_init_state[7:]
 
@@ -1143,9 +1155,18 @@ class AnymalTerrainTask(RLTask):
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
         self.feet_air_time[env_ids] = 0.0
-        self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
-        self.obs_history_buf[env_ids, :, :] = 0.   
+        self.obs_history_buf[env_ids, :, :] = 0. 
+        # only randomize once, on the very first-ever call to reset_idx:
+        if self.randomize_episode_start and not self._start_randomized:
+            # pick a random starting tick in [0, max_episode_length)
+            self.progress_buf[env_ids] = torch.randint(
+                0, self.max_episode_length, (len(env_ids),), device=self.device
+            )
+            self._start_randomized = True
+        else:
+            # after that, always zero it
+            self.progress_buf[env_ids] = 0  
 
         self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
         self.extras["time_outs"] = self.timeout_buf
@@ -1201,8 +1222,17 @@ class AnymalTerrainTask(RLTask):
                 torques = self.Kp * self.Kp_factors * (
                     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
                 torques = torques * self.motor_strengths
-                max_tau = self.torque_limits
-                torques = torch.clip(torques, -max_tau, max_tau)
+
+                joint_vel = self.dof_vel        # shape: (N, dof)
+                vel_limit = self.dof_vel_limits  # shape: (dof,)
+
+                # compute per-joint max and min allowed torques
+                max_eff = self.saturation_effort * (1.0 - joint_vel / vel_limit)
+                max_eff = torch.clip(max_eff, min=0.0, max=self.torque_limits)
+                min_eff = self.saturation_effort * (-1.0 - joint_vel / vel_limit)
+                min_eff = torch.clip(min_eff, min=-self.torque_limits, max=0.0)
+                torques = torch.clip(torques, min=min_eff, max=max_eff)
+
                 self._anymals.set_joint_efforts(torques)
                 self.torques = torques
                 SimulationContext.step(self.world, render=False)
@@ -1372,7 +1402,7 @@ class AnymalTerrainTask(RLTask):
         Build a 'proprio_obs' block and (optionally) a 'heights' block,
         then combine them in obs_buf. Only 'proprio_obs' is put into obs_history.
         """
-        # 1) Collect all your normal (proprio) observations:
+        contact_state = (torch.norm(self.foot_contact_forces[:, self.feet_indices, :], dim=2) > 1.0).float()     
         proprio_obs = torch.cat((
             self.base_lin_vel * self.lin_vel_scale,
             self.base_ang_vel * self.ang_vel_scale,
@@ -1381,6 +1411,7 @@ class AnymalTerrainTask(RLTask):
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
             self.actions,
+            contact_state
         ), dim=-1)  # this should match self._num_proprio in size
 
         # 2) Add noise (only on proprio)
@@ -1412,6 +1443,12 @@ class AnymalTerrainTask(RLTask):
                 (self.com_displacements - self.com_shift) * self.com_scale,
                 (self.motor_strengths - self.motor_strength_shift) * self.motor_strength_scale,
             ]
+            # contact normals (unit vectors)  ---------
+            eps = 1e-8
+            normals = self.foot_contact_forces[:, self.feet_indices, :]  # (N,4,3)
+            normals_mag = torch.linalg.norm(normals, dim=2, keepdim=True).clamp_min(eps)
+            contact_normals = normals / normals_mag                      # (N,4,3)
+            priv_parts.append(contact_normals.view(self.num_envs, -1))   # flatten to (N,12)
 
         # compliance (soft contacts)
         if self.priv_compliance and self._compliance_active:
@@ -1586,7 +1623,6 @@ class AnymalTerrainTask(RLTask):
     
     #------------ end reward functions----------------
     
-
 
     #------------ particle based functions----------------
     def create_particle_systems(self):
@@ -2092,6 +2128,94 @@ def wrap_to_pi(angles):
     angles %= 2 * np.pi
     angles -= 2 * np.pi * (angles > np.pi)
     return angles
+
+@torch.jit.script
+def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
+    """Convert rotations given as Euler angles in radians to Quaternions.
+
+    Note:
+        The euler angles are assumed in XYZ convention.
+
+    Args:
+        roll: Rotation around x-axis (in radians). Shape is (N,).
+        pitch: Rotation around y-axis (in radians). Shape is (N,).
+        yaw: Rotation around z-axis (in radians). Shape is (N,).
+
+    Returns:
+        The quaternion in (w, x, y, z). Shape is (N, 4).
+    """
+    cy = torch.cos(yaw * 0.5)
+    sy = torch.sin(yaw * 0.5)
+    cr = torch.cos(roll * 0.5)
+    sr = torch.sin(roll * 0.5)
+    cp = torch.cos(pitch * 0.5)
+    sp = torch.sin(pitch * 0.5)
+    # compute quaternion
+    qw = cy * cr * cp + sy * sr * sp
+    qx = cy * sr * cp - sy * cr * sp
+    qy = cy * cr * sp + sy * sr * cp
+    qz = sy * cr * cp - cy * sr * sp
+
+    return torch.stack([qw, qx, qy, qz], dim=-1)
+
+@torch.jit.script
+def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    """Multiply two quaternions together.
+
+    Args:
+        q1: The first quaternion in (w, x, y, z). Shape is (..., 4).
+        q2: The second quaternion in (w, x, y, z). Shape is (..., 4).
+
+    Returns:
+        The product of the two quaternions in (w, x, y, z). Shape is (..., 4).
+
+    Raises:
+        ValueError: Input shapes of ``q1`` and ``q2`` are not matching.
+    """
+    # check input is correct
+    if q1.shape != q2.shape:
+        msg = f"Expected input quaternion shape mismatch: {q1.shape} != {q2.shape}."
+        raise ValueError(msg)
+    # reshape to (N, 4) for multiplication
+    shape = q1.shape
+    q1 = q1.reshape(-1, 4)
+    q2 = q2.reshape(-1, 4)
+    # extract components from quaternions
+    w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
+    w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
+    # perform multiplication
+    ww = (z1 + x1) * (x2 + y2)
+    yy = (w1 - y1) * (w2 + z2)
+    zz = (w1 + y1) * (w2 - z2)
+    xx = ww + yy + zz
+    qq = 0.5 * (xx + (z1 - x1) * (x2 - y2))
+    w = qq - ww + (z1 - y1) * (y2 - z2)
+    x = qq - xx + (x1 + w1) * (x2 + w2)
+    y = qq - yy + (w1 - x1) * (y2 + z2)
+    z = qq - zz + (z1 + y1) * (w2 - x2)
+
+    return torch.stack([w, x, y, z], dim=-1).view(shape)
+
+
+def sample_uniform(
+    lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str
+) -> torch.Tensor:
+    """Sample uniformly within a range.
+
+    Args:
+        lower: Lower bound of uniform range.
+        upper: Upper bound of uniform range.
+        size: The shape of the tensor.
+        device: Device to create tensor on.
+
+    Returns:
+        Sampled tensor. Shape is based on :attr:`size`.
+    """
+    # convert to tuple
+    if isinstance(size, int):
+        size = (size,)
+    # return tensor
+    return torch.rand(*size, device=device) * (upper - lower) + lower
 
 
 def get_axis_params(value, axis_idx, x_value=0.0, dtype=float, n_dims=3):
