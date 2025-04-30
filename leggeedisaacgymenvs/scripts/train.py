@@ -58,7 +58,7 @@ class RLGTrainer:
             runner.load(self.cfg.checkpoint)
 
         if not self.cfg.test:
-            runner.learn(num_learning_iterations=self.rlg_config_dict["runner"]["max_iterations"], init_at_random_ep_len=True)
+            runner.learn(num_learning_iterations=self.rlg_config_dict["runner"]["max_iterations"], init_at_random_ep_len=False)
 
             # dump config dict#
             os.makedirs(experiment_dir, exist_ok=True)

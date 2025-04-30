@@ -877,8 +877,8 @@ class AnymalTerrainTask(RLTask):
         self.extras = {}
         self.noise_scale_vec = self._get_noise_scale_vec()
         self.commands = torch.zeros(
-            self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False
-        )  # x vel, y vel, yaw vel, heading
+            self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False
+        )  # x vel, y vel, yaw vel
         self.commands_scale = torch.tensor(
             [self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale],
             device=self.device,
@@ -1035,10 +1035,10 @@ class AnymalTerrainTask(RLTask):
     def reset_idx(self, env_ids):
         indices = env_ids.to(dtype=torch.int32)
         positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
-        velocities = torch_rand_float(-0.5, 0.5, (len(env_ids), self.num_dof), device=self.device)
+        # velocities = torch_rand_float(-0.5, 0.5, (len(env_ids), self.num_dof), device=self.device)
 
         self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
-        self.dof_vel[env_ids] = velocities
+        self.dof_vel[env_ids] = 0
 
         if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
             self._resample_commands(env_ids)
@@ -1087,13 +1087,15 @@ class AnymalTerrainTask(RLTask):
         self.base_pos[env_ids, 0] += rand_x
         self.base_pos[env_ids, 1] += rand_y
 
-        rand_yaw = torch_rand_float(0, 2 * np.pi, (len(env_ids), 1), device=self.device)
-        random_quat = torch.cat([
-            torch.cos(rand_yaw / 2),
-            torch.zeros(len(env_ids), 2, device=self.device),
-            torch.sin(rand_yaw / 2)
-        ], dim=1)
-        self.base_quat[env_ids] = random_quat        
+        # rand_yaw = torch_rand_float(0, 2 * np.pi, (len(env_ids), 1), device=self.device)
+        # random_quat = torch.cat([
+        #     torch.cos(rand_yaw / 2),
+        #     torch.zeros(len(env_ids), 2, device=self.device),
+        #     torch.sin(rand_yaw / 2)
+        # ], dim=1)
+        # self.base_quat[env_ids] = random_quat 
+        self.base_quat[env_ids] = self.base_init_state[3:7]
+
         self.base_velocities[env_ids] = self.base_init_state[7:]
 
         self._anymals.set_world_poses(
@@ -1227,9 +1229,7 @@ class AnymalTerrainTask(RLTask):
             self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])
             self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 3:6])
             self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
-            forward = quat_apply(self.base_quat, self.forward_vec)
-            heading = torch.atan2(forward[:, 1], forward[:, 0])
-            self.commands[:, 2] = torch.clip(0.5 * wrap_to_pi(self.commands[:, 3] - heading), -1.0, 1.0)
+
 
             if self.measure_heights:
                 if self._particles_active:

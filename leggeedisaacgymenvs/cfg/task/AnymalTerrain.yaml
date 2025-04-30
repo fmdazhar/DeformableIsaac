@@ -8,23 +8,23 @@ env:
 
   commands:
     VelocityCurriculum: False
-    curriculum_seed:  
+    curriculum_seed:  1
     limit_vel_x:     [-10.0, 10.0]
     limit_vel_y:     [-0.6, 0.6]
     limit_vel_yaw:   [-1, 1]
     num_bins_vel_x:    30
     num_bins_vel_y:    3
     num_bins_vel_yaw:  3
-    lin_vel_x:     [-1.0, 1.0]
+    lin_vel_x:     [-0.6, 0.6]
     lin_vel_y:     [-0.6, 0.6]
-    ang_vel_yaw:   [-1.0, 1.0]
+    ang_vel_yaw:   [-0.6, 0.6]
     curriculum_thresholds:
       tracking_lin_vel: 0.8
       tracking_ang_vel: 0.8
       tracking_eps_length: 0.9
 
   terrain:
-    measureHeights: True
+    measureHeights: False
     debugHeights: False
     staticFriction: 1.0 # [-]
     dynamicFriction: 1.0 # [-]

@@ -22,11 +22,11 @@ algorithm:
   entropy_coef: 0.01
   num_learning_epochs: 5
   num_mini_batches: 4
-  learning_rate: 1.0e-3 #5.e-4
+  learning_rate: 3.e-4 #1.0e-3 #5.e-4
   schedule: adaptive #fixed #'adaptive'
   gamma: 0.99
   lam: 0.95
-  desired_kl: 0.01 #null #0.01
+  desired_kl: 0.008 #null #0.01
   max_grad_norm: 1.0
   # Update min_policy_std to match the action space (12 values)
   min_policy_std: [0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25]
