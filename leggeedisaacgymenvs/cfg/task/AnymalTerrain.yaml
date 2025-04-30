@@ -433,4 +433,4 @@ sim:
     stabilization_threshold: 0.001
     # per-body
     density: -1
-    max_depenetration_velocity: 1.0
+    max_depenetration_velocity: 100.0

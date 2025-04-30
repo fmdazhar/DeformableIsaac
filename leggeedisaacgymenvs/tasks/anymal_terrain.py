@@ -40,7 +40,7 @@ class AnymalTerrainTask(RLTask):
         self.update_config()
 
         self._num_actions = 12
-        self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4
+        self._num_proprio = 48 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 
         self._num_privileged_observations = None
         # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
@@ -289,7 +289,7 @@ class AnymalTerrainTask(RLTask):
         noise_vec[12:24] = self._task_cfg["env"]["learn"]["dofPositionNoise"] * noise_level * self.dof_pos_scale
         noise_vec[24:36] = self._task_cfg["env"]["learn"]["dofVelocityNoise"] * noise_level * self.dof_vel_scale
         noise_vec[36:48] = 0.0  # previous actions
-        noise_vec[48:52] = 0.0 # contact force states
+        # noise_vec[48:52] = 0.0 # contact force states
 
         return noise_vec
         
@@ -1067,7 +1067,7 @@ class AnymalTerrainTask(RLTask):
         if self.curriculum:
             self.update_terrain_level(env_ids)
 
-        self._randomize_dof_props(env_ids)
+        # self._randomize_dof_props(env_ids)
 
         self.base_pos[env_ids] = self.base_init_state[0:3]
         self.base_pos[env_ids, 0:3] += self.env_origins[env_ids]
@@ -1170,7 +1170,7 @@ class AnymalTerrainTask(RLTask):
             self.progress_buf[env_ids] = 0  
 
         self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
-        self.extras["time_outs"] = self.timeout_buf
+        # self.extras["time_outs"] = self.timeout_buf
         self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
         self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
         self.extras["episode"]["min_command_y_vel"]   = torch.min(self.commands[:, 1])
@@ -1413,8 +1413,8 @@ class AnymalTerrainTask(RLTask):
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
             self.actions,
-            contact_state
-        ), dim=-1)  # this should match self._num_proprio in size
+            # contact_state
+        ), dim=-1)  
 
         # 2) Add noise (only on proprio)
         if self.add_noise:
