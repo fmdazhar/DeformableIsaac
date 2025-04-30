@@ -3,14 +3,8 @@ name: AnymalTerrain
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:16,${...num_envs}}
+  numEnvs: ${resolve_default:2048,${...num_envs}}
   clipObservations: 100
-  priv_base: true
-  priv_compliance: true
-  priv_pbd_particle: true
-  priv_pbd_particle_base: true
-  priv_pbd_non_fluid: true
-  priv_pbd_fluid: true
 
   commands:
     VelocityCurriculum: False
@@ -30,15 +24,16 @@ env:
       tracking_eps_length: 0.9
 
   terrain:
-    measureHeights: False
+    measureHeights: True
+    debugHeights: False
     staticFriction: 1.0 # [-]
     dynamicFriction: 1.0 # [-]
     restitution: 0. # [-]
 
     numLevels: 10 # for no curriculum
-    numTerrains: 10 # for no curriculum
+    numTerrains: 20 # for no curriculum
 
-    curriculum: True
+    curriculum: False
     curriculum_thresholds:
       tracking_lin_vel: 0.8
       tracking_ang_vel: 0.8
@@ -57,31 +52,53 @@ env:
       - name: flat
         particle_present: False
         compliant: False
-        count: 5
+        count: 10
         level: 0
-      - name: flat
-        particle_present: False
-        compliant: False
-        count: 5
-        level: 0
-      - name: flat
-        compliant: True
-        particle_present: False
-        count: 5
-        level: 1
-      - name: flat
-        compliant: True
-        particle_present: False
-        count: 5
-        level: 1
-      - name: central_depression_terrain
-        compliant: True
-        count: 2
-        level: 2
-        particle_present: True
-        system: 1
-        depth: 0.13
-        size: 4           
+      # - name: flat
+      #   particle_present: False
+      #   compliant: False
+      #   count: 10
+      #   level: 0
+      # - name: flat
+      #   particle_present: False
+      #   compliant: False
+      #   count: 10
+      #   level: 0
+      # - name: flat
+      #   particle_present: False
+      #   compliant: False
+      #   count: 10
+      #   level: 0
+      # - name: flat
+      #   particle_present: False
+      #   compliant: False
+      #   count: 10
+      #   level: 0
+      # - name: flat
+      #   particle_present: False
+      #   compliant: False
+      #   count: 10
+      #   level: 0
+      # - name: flat
+      #   particle_present: False
+      #   compliant: False
+      #   count: 10
+      #   level: 0
+        
+      # - name: flat
+      #   compliant: True
+      #   particle_present: False
+      #   count: 10
+      #   level: 1
+
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   count: 2
+      #   level: 2
+      #   particle_present: True
+      #   system: 1
+      #   depth: 0.13
+      #   size: 4           
       # - name: central_depression_terrain
       #   compliant: True
       #   count: 1
@@ -208,7 +225,7 @@ env:
     
   control:
     # PD Drive parameters:
-    stiffness: 20.0 # [N*m/rad]
+    stiffness: 25.0 # [N*m/rad]
     damping: 0.5 # [N*m*s/rad]
     # action scale: target angle = actionScale * action + defaultAngle
     actionScale: 0.25
@@ -235,7 +252,6 @@ env:
     # rewards
     scales:
       termination: -0.0
-      joint_tracking: 0.0
       tracking_lin_vel: 1.0
       tracking_ang_vel: 0.5
       lin_vel_z: -2.0
@@ -251,15 +267,15 @@ env:
       action_rate: -0.01
       stand_still: -0.0
       dof_pos_limits: -10.0
-      feet_contact_forces: -0.01
+      feet_contact_forces: 0.0 #-0.01
 
-    onlyPositiveRewards: False
-    baseHeightTarget: 0.52
+    onlyPositiveRewards: True
+    baseHeightTarget: 0.25
     softDofPositionLimit: 0.9
     softDofVelLimit: 0.5
     softTorqueLimit: 0.5
-    trackingSigma: 0.1
-    maxContactForce: 1000.0
+    trackingSigma: 0.25
+    maxContactForce: 100.0
 
     # normalization
     linearVelocityScale: 2.0
@@ -285,7 +301,7 @@ env:
     pushInterval_s: 15
 
     # episode length in seconds
-    episodeLength_s: 3
+    episodeLength_s: 20
 
   randomizationRanges:
     frictionRange: [0.5, 1.25] # increase range
@@ -298,21 +314,25 @@ env:
     KdFactorRange: [0.5, 1.5]
     gravityRange: [-1.0, 1.0]
 
-    randomizeGravity: True
+    randomizeGravity: False
     gravityRandIntervalSecs: 7
-    randomizeFriction: True
-    randomizeCOM: True
-    randomizeAddedMass: True
-    randomizeMotorStrength: True
+    randomizeFriction: False
+    randomizeCOM: False
+    randomizeAddedMass: False
+    randomizeMotorStrength: False
 
     randomizeMotorOffset: False
     randomizeKpFactor: False
     randomizeKdFactor: False
 
-    priv_base: True
-    priv_compliance: True
-    priv_pbd_particle: True
-    priv_pbd_fluid: True
+    priv_base: False
+    priv_compliance: False
+    priv_pbd_particle: False
+
+    priv_pbd_particle_base: False
+    priv_pbd_non_fluid: False
+    priv_pbd_fluid: False
+
 
     material_randomization:
       enabled: False
@@ -323,7 +343,7 @@ env:
         damping_multiplier: [0.05, 0.2]
 
       particles:
-        enabled: True
+        enabled: False
         interval: 20
         systems:
           system1:
@@ -362,7 +382,7 @@ sim:
   add_distant_light: True
   use_fabric: False
   enable_scene_query_support: False
-  disable_contact_processing: False
+  disable_contact_processing: True
 
   # set to True if you use camera sensors in the environment
   enable_cameras: False
@@ -394,7 +414,7 @@ sim:
     # gpu_found_lost_pairs_capacity: 4196352 #4194304
     # gpu_found_lost_aggregate_pairs_capacity: 234684416 #117463040 #33554432
     gpu_found_lost_pairs_capacity: 4194304
-    gpu_found_lost_aggregate_pairs_capacity: 33554432 #111111168 #33554432
+    gpu_found_lost_aggregate_pairs_capacity: 44035072 #33554432 #111111168 #33554432
     
     gpu_total_aggregate_pairs_capacity: 4194304
     gpu_max_soft_body_contacts: 1048576
@@ -416,4 +436,4 @@ sim:
     stabilization_threshold: 0.001
     # per-body
     density: -1
-    max_depenetration_velocity: 100.0
+    max_depenetration_velocity: 1.0

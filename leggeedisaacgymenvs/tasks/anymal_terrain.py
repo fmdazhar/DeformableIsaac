@@ -9,7 +9,7 @@ from omni.isaac.core.utils.prims import get_prim_at_path, find_matching_prim_pat
 from omni.isaac.core.utils.stage import get_current_stage
 from omni.isaac.core.utils.torch.rotations import *
 from omni.isaac.core.prims import RigidPrimView
-from omni.isaac.core.utils.torch.maths import tensor_clamp, torch_rand_float, unscale
+# from omni.isaac.core.utils.torch.maths import tensor_clamp, torch_rand_float, unscale
 from omni.isaac.core.prims.soft.particle_system import ParticleSystem
 from omni.isaac.core.prims.soft.particle_system_view import ParticleSystemView
 
@@ -40,7 +40,7 @@ class AnymalTerrainTask(RLTask):
         self.update_config()
 
         self._num_actions = 12
-        self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4 
+        self._num_proprio = 48 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 
         self._num_privileged_observations = None
         # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
@@ -71,7 +71,7 @@ class AnymalTerrainTask(RLTask):
             )
         else:
             self.measured_heights = None
-        self.debug_heights = True
+        
 
         # Initialize dictionaries to track created particle systems and materials
         self.created_particle_systems = {}
@@ -144,9 +144,9 @@ class AnymalTerrainTask(RLTask):
         self.damping_multiplier_range = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["compliance"]["damping_multiplier"]
         
         # Control which privileged observations are included
-        self.priv_base       = self._task_cfg['env'].get('priv_base', True)
-        self.priv_compliance = self._task_cfg['env'].get('priv_compliance', True)
-        self.priv_pbd_particle = self._task_cfg['env'].get('priv_pbd_particle', True)
+        self.priv_base       = self._task_cfg['env']["randomizationRanges"]["priv_base"]
+        self.priv_compliance = self._task_cfg['env']["randomizationRanges"]["priv_compliance"]
+        self.priv_pbd_particle = self._task_cfg['env']["randomizationRanges"]["priv_pbd_particle"]
         
         # Calculate the damping range:
         damping_min = self.stiffness_range[0] * self.damping_multiplier_range[0]
@@ -169,6 +169,7 @@ class AnymalTerrainTask(RLTask):
         self.teleport_active = self._task_cfg["env"]["terrain"]["teleportActive"]
         self.teleport_buffer = self._task_cfg["env"]["terrain"]["teleportBuffer"]
         self.measure_heights = self._task_cfg["env"]["terrain"]["measureHeights"]
+        self.debug_heights = self._task_cfg["env"]["terrain"]["debugHeights"]
 
         self.base_threshold = 0.2
         self.thigh_threshold = 0.1
@@ -283,8 +284,7 @@ class AnymalTerrainTask(RLTask):
         noise_vec[9:12] = 0.0  # commands
         noise_vec[12:24] = self._task_cfg["env"]["learn"]["dofPositionNoise"] * noise_level * self.dof_pos_scale
         noise_vec[24:36] = self._task_cfg["env"]["learn"]["dofVelocityNoise"] * noise_level * self.dof_vel_scale
-        noise_vec[36:40] = self._task_cfg["env"]["learn"]["contactForceNoise"] * noise_level * self.contact_force_scale
-        noise_vec[40:52] = 0.0  # previous actions
+        noise_vec[36:48] = 0.0  # previous actions
 
         return noise_vec
         
@@ -552,7 +552,7 @@ class AnymalTerrainTask(RLTask):
             "a1", get_prim_at_path(anymal.prim_path), self._sim_config.parse_actor_config("a1")
         )
         anymal.set_a1_properties(self._stage, anymal.prim)
-        anymal.prepare_contacts(self._stage, anymal.prim)
+        # anymal.prepare_contacts(self._stage, anymal.prim)
 
         self.dof_names = anymal.dof_names
         for i in range(self.num_actions):
@@ -1103,12 +1103,6 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_joint_positions(positions=self.dof_pos[env_ids].clone(), indices=indices)
         self._anymals.set_joint_velocities(velocities=self.dof_vel[env_ids].clone(), indices=indices)
 
-        # Print environment origins and levels for each reset
-        for env in env_ids:
-            origin = self.env_origins[env].cpu().tolist()
-            level = int(self.terrain_levels[env].item())
-            print(f"[Reset] Env {env.item()} - Origin: {origin}, Level: {level}")
-
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -1116,30 +1110,30 @@ class AnymalTerrainTask(RLTask):
                 torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
             )
 
-        # Get a per‐environment reward in X, instead of a single scalar
-        lin_x_rewards = self.episode_sums["tracking_lin_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
-        ang_x_rewards = self.episode_sums["tracking_ang_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
-        final_lengths = self.progress_buf[env_ids]  / self.max_episode_length_s     # Update history buffer for each environment
+        # # Get a per‐environment reward in X, instead of a single scalar
+        # lin_x_rewards = self.episode_sums["tracking_lin_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
+        # ang_x_rewards = self.episode_sums["tracking_ang_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
+        # final_lengths = self.progress_buf[env_ids]  / self.max_episode_length_s     # Update history buffer for each environment
 
-        # 1. current write positions for every env we’re resetting
-        lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
-        ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
-        len_pos = self.ep_length_history_idx[env_ids]      % self.tracking_history_len   # episode length
+        # # 1. current write positions for every env we’re resetting
+        # lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
+        # ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
+        # len_pos = self.ep_length_history_idx[env_ids]      % self.tracking_history_len   # episode length
 
-        # 2. write the new values
-        self.tracking_lin_vel_x_history[env_ids, lin_pos] = lin_x_rewards                 # (N,)
-        self.tracking_ang_vel_x_history[env_ids, ang_pos] = ang_x_rewards                 # (N,)
-        self.ep_length_history      [env_ids, len_pos] = final_lengths                    # (N,)
+        # # 2. write the new values
+        # self.tracking_lin_vel_x_history[env_ids, lin_pos] = lin_x_rewards                 # (N,)
+        # self.tracking_ang_vel_x_history[env_ids, ang_pos] = ang_x_rewards                 # (N,)
+        # self.ep_length_history      [env_ids, len_pos] = final_lengths                    # (N,)
 
-        # 3. advance the circular indices (modulo history length)
-        self.tracking_lin_vel_x_history_idx[env_ids] = (lin_pos + 1) % self.tracking_history_len
-        self.tracking_ang_vel_x_history_idx[env_ids] = (ang_pos + 1) % self.tracking_history_len
-        self.ep_length_history_idx      [env_ids] = (len_pos + 1) % self.tracking_history_len
+        # # 3. advance the circular indices (modulo history length)
+        # self.tracking_lin_vel_x_history_idx[env_ids] = (lin_pos + 1) % self.tracking_history_len
+        # self.tracking_ang_vel_x_history_idx[env_ids] = (ang_pos + 1) % self.tracking_history_len
+        # self.ep_length_history_idx      [env_ids] = (len_pos + 1) % self.tracking_history_len
 
-        # 4. mark a buffer as ‘full’ the first time it wraps around
-        self.tracking_lin_vel_x_history_full[env_ids] |= (self.tracking_lin_vel_x_history_idx[env_ids] == 0)
-        self.tracking_ang_vel_x_history_full[env_ids] |= (self.tracking_ang_vel_x_history_idx[env_ids] == 0)
-        self.ep_length_history_full      [env_ids] |= (self.ep_length_history_idx      [env_ids] == 0)
+        # # 4. mark a buffer as ‘full’ the first time it wraps around
+        # self.tracking_lin_vel_x_history_full[env_ids] |= (self.tracking_lin_vel_x_history_idx[env_ids] == 0)
+        # self.tracking_ang_vel_x_history_full[env_ids] |= (self.tracking_ang_vel_x_history_idx[env_ids] == 0)
+        # self.ep_length_history_full      [env_ids] |= (self.ep_length_history_idx      [env_ids] == 0)
 
         for key in self.episode_sums.keys():      
             self.episode_sums[key][env_ids] = 0.0
@@ -1152,7 +1146,7 @@ class AnymalTerrainTask(RLTask):
         self.obs_history_buf[env_ids, :, :] = 0.   
 
         self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
-        self.extras["episode"]["time_outs"] = self.timeout_buf
+        self.extras["time_outs"] = self.timeout_buf
         self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
         self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
         self.extras["episode"]["min_command_y_vel"]   = torch.min(self.commands[:, 1])
@@ -1188,10 +1182,10 @@ class AnymalTerrainTask(RLTask):
 
     def refresh_net_contact_force_tensors(self):
         # self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
-        self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
-        self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
-        self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3)
-        self.base_contact_forces = self._anymals._base.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 3)
+        self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
 
     def pre_physics_step(self, actions):
         if not self.world.is_playing():
@@ -1273,7 +1267,7 @@ class AnymalTerrainTask(RLTask):
         self.reset_buf = torch.where(self.timeout_buf.bool(), torch.ones_like(self.reset_buf), self.reset_buf)
         
 
-        if self.teleport_active:
+        if self.teleport_active and not self.curriculum:
             # Convert each robot's base (x,y) position into heightfield indices
             hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
             hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
@@ -1358,7 +1352,7 @@ class AnymalTerrainTask(RLTask):
         for name in self.inactive_reward_names:
             raw = getattr(self, f"_reward_{name}")()
             # e.g. store in extras or episode_sums:
-            self.episode_sums[f"inactive_{name}"] = raw * self.dt
+            self.episode_sums[f"inactive_{name}"] += raw * self.dt
 
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
@@ -1386,7 +1380,6 @@ class AnymalTerrainTask(RLTask):
             self.commands[:, :3] * self.commands_scale,
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
-            torch.norm(self.foot_contact_forces[:, self.feet_indices, :], dim=-1),
             self.actions,
         ), dim=-1)  # this should match self._num_proprio in size
 
@@ -1454,12 +1447,7 @@ class AnymalTerrainTask(RLTask):
                 final_obs_no_history.unsqueeze(1)          # append newest
             ], dim=1)
         )
-        # print("  P (proprio+height):", final_obs_no_history.shape[1])
-        # print("  Q (privileged)      :", priv_buf.shape[1])
-        # print("  H (history)         :", self.obs_history_buf.shape[1] * self.obs_history_buf.shape[2])
-        # print("  Total real obs dim  :", final_obs_no_history.shape[1] + priv_buf.shape[1] + 
-        #                                 self.obs_history_buf.shape[1] * self.obs_history_buf.shape[2])
-        # print("  _num_observations   :", self._num_observations)
+
 
     def get_heights_below_foot(self, env_ids=None):
 

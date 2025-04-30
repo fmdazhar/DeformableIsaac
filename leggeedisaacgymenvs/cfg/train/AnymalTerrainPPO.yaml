@@ -6,7 +6,7 @@ params:
 policy:
   # Only include noise for leg actions (num_leg_actions = 12)
   # Using the first 12 values of the original init_std specification
-  init_std: [0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0]
+  init_std: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   actor_hidden_dims: [512]
   critic_hidden_dims: [512]
   activation: elu
@@ -19,10 +19,10 @@ algorithm:
   value_loss_coef: 1.0
   use_clipped_value_loss: true
   clip_param: 0.2
-  entropy_coef: 0.0
+  entropy_coef: 0.01
   num_learning_epochs: 5
   num_mini_batches: 4
-  learning_rate: 2e-4 #1.e-3 #5.e-4
+  learning_rate: 1.0e-3 #5.e-4
   schedule: adaptive #fixed #'adaptive'
   gamma: 0.99
   lam: 0.95
@@ -30,7 +30,7 @@ algorithm:
   max_grad_norm: 1.0
   # Update min_policy_std to match the action space (12 values)
   min_policy_std: [0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25]
-  use_history_encoding: true
+  use_history_encoding: False
   dagger_update_freq: 20
   priv_reg_coef_schedual: [0, 0, 3000, 7000]
 

@@ -42,7 +42,9 @@ class A1(Robot):
 
         if self._usd_path is None:
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            self._usd_path = os.path.join(script_dir, "../asset/Unitree/a1.usd")
+            # self._usd_path = os.path.join(script_dir, "../asset/Unitree/a1.usd")
+            self._usd_path = os.path.join(script_dir, "../asset/Collected_A1/a1.usd")
+
 
         # Add the A1 reference to the stage at the specified prim path
         add_reference_to_stage(self._usd_path, prim_path)
@@ -61,16 +63,16 @@ class A1(Robot):
             self._prim_path + "/RR_foot",
         ]
 
-        for i in range(4):
-            omni.kit.commands.execute(
-                "IsaacSensorCreateContactSensor",
-                path="/sensor",
-                parent=self.feet_path[i],
-                min_threshold=0,
-                max_threshold=1000000,
-                radius=-1,
-                sensor_period=-1,
-            )
+        # for i in range(4):
+        #     omni.kit.commands.execute(
+        #         "IsaacSensorCreateContactSensor",
+        #         path="/sensor",
+        #         parent=self.feet_path[i],
+        #         min_threshold=0,
+        #         max_threshold=1000000,
+        #         radius=-1,
+        #         sensor_period=-1,
+        #     )
 
         # self.foot_force = np.zeros(4)
         # self.enable_foot_filter = True
@@ -131,13 +133,13 @@ class A1(Robot):
 
     def prepare_contacts(self, stage, prim):
         for link_prim in prim.GetChildren():
-            if link_prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
-                if "_hip" not in str(link_prim.GetPrimPath()):
-                    rb = PhysxSchema.PhysxRigidBodyAPI.Get(stage, link_prim.GetPrimPath())
-                    rb.CreateSleepThresholdAttr().Set(0)
-                    if not link_prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
-                        cr_api = PhysxSchema.PhysxContactReportAPI.Apply(link_prim)
-                    else:
-                        cr_api = PhysxSchema.PhysxContactReportAPI.Get(stage, link_prim.GetPrimPath())
-                    # set threshold to zero
-                    cr_api.CreateThresholdAttr().Set(0)
+            path = str(link_prim.GetPrimPath())
+            if link_prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI) and '_hip' not in path and '_thigh_shoulder' not in path and '_base' not in path:
+                rb = PhysxSchema.PhysxRigidBodyAPI.Get(stage, link_prim.GetPrimPath())
+                rb.CreateSleepThresholdAttr().Set(0)
+                if not link_prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
+                    cr_api = PhysxSchema.PhysxContactReportAPI.Apply(link_prim)
+                else:
+                    cr_api = PhysxSchema.PhysxContactReportAPI.Get(stage, link_prim.GetPrimPath())
+                # set threshold to zero
+                cr_api.CreateThresholdAttr().Set(0)

@@ -12,7 +12,7 @@ class A1View(ArticulationView):
         prim_paths_expr: str,
         name: Optional[str] = "A1View",
         track_contact_forces=False,
-        prepare_contact_sensors=False,
+        prepare_contact_sensors=True,
     ) -> None:
         """[summary]"""
 
