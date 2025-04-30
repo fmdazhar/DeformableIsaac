@@ -1103,9 +1103,10 @@ class AnymalTerrainTask(RLTask):
             (len(env_ids), 3), 
             device=self.device
         )  # shape: (N,3)
-        orient_delta = quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2])                    # (N,4)
-        base_q_init  = self.base_init_state[3:7]                                    # (N,4)
-        new_quats    = quat_mul(base_q_init, orient_delta)                        # (N,4)
+        orient_delta = quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2])                    
+        base_q_init  = self.base_init_state[3:7] 
+        base_q_batch = base_q_init.unsqueeze(0).expand(len(env_ids), 4)                                   
+        new_quats    = quat_mul(base_q_batch, orient_delta)                        
         self.base_quat[env_ids] = new_quats
 
         self.base_velocities[env_ids] = self.base_init_state[7:]
@@ -1225,13 +1226,14 @@ class AnymalTerrainTask(RLTask):
 
                 joint_vel = self.dof_vel        # shape: (N, dof)
                 vel_limit = self.dof_vel_limits  # shape: (dof,)
-
                 # compute per-joint max and min allowed torques
                 max_eff = self.saturation_effort * (1.0 - joint_vel / vel_limit)
-                max_eff = torch.clip(max_eff, min=0.0, max=self.torque_limits)
+                zero      = torch.zeros_like(max_eff)
+                max_eff   = torch.clip(max_eff, zero, self.torque_limits)
                 min_eff = self.saturation_effort * (-1.0 - joint_vel / vel_limit)
-                min_eff = torch.clip(min_eff, min=-self.torque_limits, max=0.0)
-                torques = torch.clip(torques, min=min_eff, max=max_eff)
+                zero_min  = torch.zeros_like(min_eff)
+                min_eff   = torch.clip(min_eff, -self.torque_limits, zero_min)
+                torques = torch.clip(torques, min_eff, max_eff)
 
                 self._anymals.set_joint_efforts(torques)
                 self.torques = torques
