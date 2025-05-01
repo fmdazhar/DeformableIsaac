@@ -557,7 +557,7 @@ class AnymalTerrainTask(RLTask):
             "a1", get_prim_at_path(anymal.prim_path), self._sim_config.parse_actor_config("a1")
         )
         anymal.set_a1_properties(self._stage, anymal.prim)
-        # anymal.prepare_contacts(self._stage, anymal.prim)
+        anymal.prepare_contacts(self._stage, anymal.prim)
 
         self.dof_names = anymal.dof_names
         for i in range(self.num_actions):
@@ -1038,35 +1038,26 @@ class AnymalTerrainTask(RLTask):
 
         
     def reset_idx(self, env_ids):
+        if len(env_ids) == 0:
+            return
         indices = env_ids.to(dtype=torch.int32)
-        positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
-        # velocities = torch_rand_float(-0.5, 0.5, (len(env_ids), self.num_dof), device=self.device)
-
-        self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
-        self.dof_vel[env_ids] = 0
+        
+        if self.curriculum:
+            self.update_terrain_level(env_ids)
 
         if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
             self._resample_commands(env_ids)
         else:
-            num = len(env_ids)
-            x_low, x_high = self.command_x_range
-            y_low, y_high = self.command_y_range
-            yaw_low, yaw_high = self.command_yaw_range
+            self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, 1] = torch_rand_float(self.command_y_range[0], self.command_y_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, 2] = torch_rand_float(self.command_yaw_range[0], self.command_yaw_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
 
-            rand_x   = torch.rand(num, device=self.device) * (x_high - x_low) + x_low
-            rand_y   = torch.rand(num, device=self.device) * (y_high - y_low) + y_low
-            rand_yaw = torch.rand(num, device=self.device) * (yaw_high - yaw_low) + yaw_low
-
-            self.commands[env_ids, 0] = rand_x
-            self.commands[env_ids, 1] = rand_y
-            self.commands[env_ids, 2] = rand_yaw
-
-        # Zero-out tiny XY commands just like before
+        # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
 
-        if self.curriculum:
-            self.update_terrain_level(env_ids)
-
+        positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
+        self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
+        self.dof_vel[env_ids] = 0
         # self._randomize_dof_props(env_ids)
 
         self.base_pos[env_ids] = self.base_init_state[0:3]
@@ -1088,7 +1079,6 @@ class AnymalTerrainTask(RLTask):
             (len(env_ids), 1),
             device=self.device
         ).squeeze(1)
-
         self.base_pos[env_ids, 0] += rand_x
         self.base_pos[env_ids, 1] += rand_y
 
@@ -1170,7 +1160,7 @@ class AnymalTerrainTask(RLTask):
             self.progress_buf[env_ids] = 0  
 
         self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
-        # self.extras["time_outs"] = self.timeout_buf
+        self.extras["time_outs"] = self.timeout_buf
         self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
         self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
         self.extras["episode"]["min_command_y_vel"]   = torch.min(self.commands[:, 1])
@@ -1272,9 +1262,7 @@ class AnymalTerrainTask(RLTask):
             self.compute_reward()
 
             env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-            if len(env_ids) > 0:
-                self.reset_idx(env_ids)
-
+            self.reset_idx(env_ids)
             self.get_observations()
 
             self.last_actions[:] = self.actions[:]
@@ -1289,14 +1277,9 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_velocities(self.base_velocities)
 
     def check_termination(self):
-        self.timeout_buf = torch.where(
-            self.progress_buf >= self.max_episode_length - 1,
-            torch.ones_like(self.timeout_buf),
-            torch.zeros_like(self.timeout_buf),
-        )
-        self.has_fallen = (torch.norm(self.base_contact_forces, dim=1) > 1.0) 
-        self.reset_buf = self.has_fallen.clone()
-        self.reset_buf = torch.where(self.timeout_buf.bool(), torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.any(torch.norm(self.base_contact_forces, dim=1) > 1.0) 
+        self.timeout_buf = self.progress_buf > self.max_episode_length # no terminal reward for time-outs
+        self.reset_buf |= self.timeout_buf
         
 
         if self.teleport_active and not self.curriculum:

@@ -55,6 +55,7 @@ class A1(Robot):
         'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
         'FL_calf_joint',  'FR_calf_joint',  'RL_calf_joint',  'RR_calf_joint'
         ]
+        
         # contact sensor setup
         self.feet_path = [
             self._prim_path + "/FL_foot",
@@ -62,21 +63,6 @@ class A1(Robot):
             self._prim_path + "/RL_foot",
             self._prim_path + "/RR_foot",
         ]
-
-        # for i in range(4):
-        #     omni.kit.commands.execute(
-        #         "IsaacSensorCreateContactSensor",
-        #         path="/sensor",
-        #         parent=self.feet_path[i],
-        #         min_threshold=0,
-        #         max_threshold=1000000,
-        #         radius=-1,
-        #         sensor_period=-1,
-        #     )
-
-        # self.foot_force = np.zeros(4)
-        # self.enable_foot_filter = True
-        # self._cs = _sensor.acquire_contact_sensor_interface()
 
         # Initialize the Robot base class
         super().__init__(
@@ -95,29 +81,6 @@ class A1(Robot):
         """
         return self._dof_names
 
-    # @property
-    # def foot_forces(self) -> np.ndarray:
-    #     """
-    #     Returns:
-    #         np.ndarray: A 4-element array of the latest foot contact forces 
-    #         [FL_force, FR_force, RL_force, RR_force].
-    #     """
-    #     return self._foot_forces
-
-    # def update_contact_sensor_data(self) -> None:
-    #     """[summary]
-
-    #     Updates processed contact sensor data from the robot feets, store them in member variable foot_force
-    #     """
-    #     # Order: FL, FR, BL, BR
-    #     for i in range(len(self.feet_path)):
-    #         sensor_reading = self._cs.get_sensor_reading(self.feet_path[i] + "/sensor")
-    #         if sensor_reading.is_valid:
-    #             if self.enable_foot_filter:
-    #                 self.foot_force[i] = self.foot_force[i] * 0.9 + sensor_reading.value * 0.1
-    #             else:
-    #                 self.foot_force[i] = sensor_reading.value
-
     def set_a1_properties(self, stage, prim):
         for link_prim in prim.GetChildren():
             if link_prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
@@ -134,7 +97,7 @@ class A1(Robot):
     def prepare_contacts(self, stage, prim):
         for link_prim in prim.GetChildren():
             path = str(link_prim.GetPrimPath())
-            if link_prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI) and '_hip' not in path and '_thigh_shoulder' not in path and '_base' not in path:
+            if link_prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI) and '_hip' not in path:
                 rb = PhysxSchema.PhysxRigidBodyAPI.Get(stage, link_prim.GetPrimPath())
                 rb.CreateSleepThresholdAttr().Set(0)
                 if not link_prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
