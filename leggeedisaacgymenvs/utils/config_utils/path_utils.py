@@ -59,6 +59,8 @@ def get_experience(headless, enable_livestream, enable_viewport, enable_recordin
             experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.kit'
             if enable_livestream:
                 experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.gym.livestream.kit'
+            elif headless and not enable_recording:
+                experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.gym.headless.kit'
 
     else:
         experience = kit_app

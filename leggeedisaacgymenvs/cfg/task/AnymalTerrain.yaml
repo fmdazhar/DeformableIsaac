@@ -24,7 +24,7 @@ env:
       tracking_eps_length: 0.9
 
   terrain:
-    measureHeights: True
+    measureHeights: False
     debugHeights: False
     staticFriction: 1.0 # [-]
     dynamicFriction: 1.0 # [-]
@@ -407,13 +407,11 @@ sim:
     # # GPU buffers
     gpu_max_rigid_contact_count: 524288
     gpu_max_rigid_patch_count: 163840
-
     # gpu_found_lost_pairs_capacity: 4196352 #4194304
     # gpu_found_lost_aggregate_pairs_capacity: 234684416 #117463040 #33554432
-    gpu_found_lost_pairs_capacity: 4194304
-    gpu_found_lost_aggregate_pairs_capacity: 44035072 #33554432 #111111168 #33554432
-    
-    gpu_total_aggregate_pairs_capacity: 4194304
+    gpu_found_lost_pairs_capacity: 4846000 #4845755 #4194304
+    gpu_found_lost_aggregate_pairs_capacity: 111111168 #88030000 #88026293 #44035072 #33554432 #111111168 #33554432
+    gpu_total_aggregate_pairs_capacity: 4846000 #4194304
     gpu_max_soft_body_contacts: 1048576
     gpu_max_particle_contacts: 1048576
     gpu_heap_capacity: 134217728

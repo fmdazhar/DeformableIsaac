@@ -7,7 +7,6 @@ from omni.isaac.core.articulations import Articulation
 from omni.isaac.core.robots.robot import Robot
 from omni.isaac.core.utils.stage import add_reference_to_stage
 from omni.isaac.nucleus import get_assets_root_path
-from omni.isaac.sensor import _sensor
 from pxr import PhysxSchema
 
 
@@ -55,7 +54,7 @@ class A1(Robot):
         'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',
         'FL_calf_joint',  'FR_calf_joint',  'RL_calf_joint',  'RR_calf_joint'
         ]
-        
+        # ['FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint', 'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint', 'FL_calf_joint', 'FR_calf_joint', 'RL_calf_joint', 'RR_calf_joint']
         # contact sensor setup
         self.feet_path = [
             self._prim_path + "/FL_foot",

@@ -80,7 +80,6 @@ class VecEnv(VecEnvBase):
         self._obs, self._priv_obs, self._rew, self._resets, self._extras = self._task.post_physics_step()
 
         self._process_data()
-
         return self._obs, self._priv_obs, self._rew, self._resets, self._extras
 
     def get_observations(self):

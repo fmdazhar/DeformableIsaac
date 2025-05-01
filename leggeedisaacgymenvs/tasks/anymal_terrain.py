@@ -870,6 +870,7 @@ class AnymalTerrainTask(RLTask):
             print(f"[INFO] Updated PBD material at {pbd_material_path} with randomized parameters.")
             
     def post_reset(self):
+
         self.base_init_state = torch.tensor(
             self.base_init_state, dtype=torch.float, device=self.device, requires_grad=False
         )
@@ -1055,7 +1056,7 @@ class AnymalTerrainTask(RLTask):
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
 
-        positions_offset = torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof), device=self.device)
+        positions_offset = torch_rand_float(1, 1, (len(env_ids), self.num_dof), device=self.device)
         self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
         self.dof_vel[env_ids] = 0
         # self._randomize_dof_props(env_ids)
@@ -1209,22 +1210,28 @@ class AnymalTerrainTask(RLTask):
 
         for i in range(self.decimation):
             if self.world.is_playing():
-                self.joint_pos_target = self.action_scale * self.actions + self.default_dof_pos
-                torques = self.Kp * self.Kp_factors * (
-                    self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
-                torques = torques * self.motor_strengths
+                # self.joint_pos_target = self.action_scale * self.actions + self.default_dof_pos
+                # torques = self.Kp * self.Kp_factors * (
+                #     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
+                # torques = torques * self.motor_strengths
 
-                joint_vel = self.dof_vel        # shape: (N, dof)
-                vel_limit = self.dof_vel_limits  # shape: (dof,)
-                # compute per-joint max and min allowed torques
-                max_eff = self.saturation_effort * (1.0 - joint_vel / vel_limit)
-                zero      = torch.zeros_like(max_eff)
-                max_eff   = torch.clip(max_eff, zero, self.torque_limits)
-                min_eff = self.saturation_effort * (-1.0 - joint_vel / vel_limit)
-                zero_min  = torch.zeros_like(min_eff)
-                min_eff   = torch.clip(min_eff, -self.torque_limits, zero_min)
-                torques = torch.clip(torques, min_eff, max_eff)
+                # joint_vel = self.dof_vel        # shape: (N, dof)
+                # vel_limit = self.dof_vel_limits  # shape: (dof,)
+                # # compute per-joint max and min allowed torques
+                # max_eff = self.saturation_effort * (1.0 - joint_vel / vel_limit)
+                # zero      = torch.zeros_like(max_eff)
+                # max_eff   = torch.clip(max_eff, zero, self.torque_limits)
+                # min_eff = self.saturation_effort * (-1.0 - joint_vel / vel_limit)
+                # zero_min  = torch.zeros_like(min_eff)
+                # min_eff   = torch.clip(min_eff, -self.torque_limits, zero_min)
+                # torques = torch.clip(torques, min_eff, max_eff)
 
+                torques = torch.clip(
+                    self.Kp * (self.action_scale * self.actions + self.default_dof_pos - self.dof_pos)
+                    - self.Kd * self.dof_vel,
+                    -33.5,
+                    33.5,
+                )
                 self._anymals.set_joint_efforts(torques)
                 self.torques = torques
                 SimulationContext.step(self.world, render=False)
@@ -1277,7 +1284,7 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_velocities(self.base_velocities)
 
     def check_termination(self):
-        self.reset_buf = torch.any(torch.norm(self.base_contact_forces, dim=1) > 1.0) 
+        self.reset_buf = torch.norm(self.base_contact_forces.view(self.num_envs, 3), dim=1) > 1.0
         self.timeout_buf = self.progress_buf > self.max_episode_length # no terminal reward for time-outs
         self.reset_buf |= self.timeout_buf
         
@@ -1550,7 +1557,7 @@ class AnymalTerrainTask(RLTask):
 
     def _reward_termination(self):
         # Terminal reward / penalty
-        return self.has_fallen
+        return self.reset_buf * ~self.timeout_buf
     
     def _reward_dof_pos_limits(self):
         # Penalize dof positions too close to the limit
