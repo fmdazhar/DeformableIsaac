@@ -5,6 +5,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:2048,${...num_envs}}
   clipObservations: 100
+  clipActions: 10.0
 
   commands:
     VelocityCurriculum: False
