@@ -5,7 +5,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:2048,${...num_envs}}
   clipObservations: 100
-  clipActions: 10.0
+  clipActions: 5
 
   commands:
     VelocityCurriculum: False
@@ -277,7 +277,7 @@ env:
       collision: -1. #-1.
       action_rate: -0.01
       dof_pos_limits: -10.0
-
+      termination: -20.0
 
     onlyPositiveRewards: True
     baseHeightTarget: 0.25
@@ -296,18 +296,18 @@ env:
     contactForceScale: 0.01
 
     # noise
-    addNoise: False
+    addNoise: True
     noiseLevel: 1.0 # scales other values
     dofPositionNoise: 0.01
     dofVelocityNoise: 1.5
     linearVelocityNoise: 0.1
     angularVelocityNoise: 0.2
     gravityNoise: 0.05
-    heightMeasurementNoise: 0.06
+    heightMeasurementNoise: 0.1
     contactForceNoise: 0.05
 
     #randomization
-    pushEnabled: False
+    pushEnabled: True
     pushInterval_s: 15
 
     # episode length in seconds
@@ -415,7 +415,7 @@ sim:
     friction_correlation_distance: 0.025
     enable_sleeping: True
     enable_stabilization: True
-    max_depenetration_velocity: 100.0
+    max_depenetration_velocity: 1.0
 
     # # GPU buffers
     gpu_max_rigid_contact_count: 524288
@@ -423,7 +423,7 @@ sim:
     # gpu_found_lost_pairs_capacity: 4196352 #4194304
     # gpu_found_lost_aggregate_pairs_capacity: 234684416 #117463040 #33554432
     gpu_found_lost_pairs_capacity: 4846000 #4845755 #4194304
-    gpu_found_lost_aggregate_pairs_capacity: 111111168 #88030000 #88026293 #44035072 #33554432 #111111168 #33554432
+    gpu_found_lost_aggregate_pairs_capacity: 256653680 #111111168 #88030000 #88026293 #44035072 #33554432 #111111168 #33554432
     gpu_total_aggregate_pairs_capacity: 4846000 #4194304
     gpu_max_soft_body_contacts: 1048576
     gpu_max_particle_contacts: 1048576
@@ -444,4 +444,4 @@ sim:
     stabilization_threshold: 0.001
     # per-body
     density: -1
-    max_depenetration_velocity: 100.0
+    max_depenetration_velocity: 1.0

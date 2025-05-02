@@ -90,7 +90,7 @@ class A1(Robot):
                 rb.GetMaxLinearVelocityAttr().Set(1000.0)
                 rb.GetAngularDampingAttr().Set(0.0)
                 rb.GetMaxAngularVelocityAttr().Set(1000.0)
-                # rb.GetMaxDepenetrationVelocityAttr().Set(1.0)
+                rb.GetMaxDepenetrationVelocityAttr().Set(1.0)
 
 
     def prepare_contacts(self, stage, prim):

@@ -940,9 +940,9 @@ class AnymalTerrainTask(RLTask):
 
         self.foot_pos = torch.zeros((self.num_envs * 4, 3), dtype=torch.float, device=self.device)
         self.ground_heights_below_foot = torch.zeros((self.num_envs * 4), dtype=torch.float, device=self.device)
-        
+        self.base_contact_forces = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
         self.thigh_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
-        self.calf_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        # self.calf_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
         self.foot_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
 
 
@@ -1004,7 +1004,9 @@ class AnymalTerrainTask(RLTask):
         self.a1_dof_soft_upper_limits = soft_upper_limits.to(device=self._device)
 
         self.dof_vel_limits = self._anymals._physics_view.get_dof_max_velocities()[0].to(device=self._device)
-        self.torque_limits = self._anymals._physics_view.get_dof_max_forces()[0].to(device=self._device)
+        # self.torque_limits = self._anymals._physics_view.get_dof_max_forces()[0].to(device=self._device)
+        self.dof_vel_limits = 21
+        self.torque_limits = 33.5
         self.saturation_effort = 33.5
         if self._task_cfg["env"]["randomizationRanges"]["randomizeAddedMass"]:
             self._set_mass(self._anymals._base, env_ids=env_ids)
@@ -1199,7 +1201,7 @@ class AnymalTerrainTask(RLTask):
         # self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
         self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
-        self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        # self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
 
     def pre_physics_step(self, actions):
@@ -1210,28 +1212,20 @@ class AnymalTerrainTask(RLTask):
 
         for i in range(self.decimation):
             if self.world.is_playing():
-                # self.joint_pos_target = self.action_scale * self.actions + self.default_dof_pos
-                # torques = self.Kp * self.Kp_factors * (
-                #     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
-                # torques = torques * self.motor_strengths
+                self.joint_pos_target = self.action_scale * self.actions + self.default_dof_pos
+                torques = self.Kp * self.Kp_factors * (
+                    self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
+                torques = torques * self.motor_strengths
 
-                # joint_vel = self.dof_vel        # shape: (N, dof)
-                # vel_limit = self.dof_vel_limits  # shape: (dof,)
-                # # compute per-joint max and min allowed torques
-                # max_eff = self.saturation_effort * (1.0 - joint_vel / vel_limit)
-                # zero      = torch.zeros_like(max_eff)
-                # max_eff   = torch.clip(max_eff, zero, self.torque_limits)
-                # min_eff = self.saturation_effort * (-1.0 - joint_vel / vel_limit)
-                # zero_min  = torch.zeros_like(min_eff)
-                # min_eff   = torch.clip(min_eff, -self.torque_limits, zero_min)
-                # torques = torch.clip(torques, min_eff, max_eff)
+                joint_vel = self.dof_vel        
+                max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
+                zero      = torch.zeros_like(max_eff)
+                max_eff   = torch.clip(max_eff, zero, self.torque_limits)
+                min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
+                zero_min  = torch.zeros_like(min_eff)
+                min_eff   = torch.clip(min_eff, -self.torque_limits, zero_min)
+                torques = torch.clip(torques, min_eff, max_eff)
 
-                torques = torch.clip(
-                    self.Kp * (self.action_scale * self.actions + self.default_dof_pos - self.dof_pos)
-                    - self.Kd * self.dof_vel,
-                    -33.5,
-                    33.5,
-                )
                 self._anymals.set_joint_efforts(torques)
                 self.torques = torques
                 SimulationContext.step(self.world, render=False)
@@ -1284,11 +1278,10 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_velocities(self.base_velocities)
 
     def check_termination(self):
-        self.reset_buf = torch.norm(self.base_contact_forces.view(self.num_envs, 3), dim=1) > 1.0
+        self.reset_buf = torch.norm(self.base_contact_forces, dim=1) > 1.0
         self.timeout_buf = self.progress_buf > self.max_episode_length # no terminal reward for time-outs
         self.reset_buf |= self.timeout_buf
         
-
         if self.teleport_active and not self.curriculum:
             # Convert each robot's base (x,y) position into heightfield indices
             hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
@@ -1551,9 +1544,9 @@ class AnymalTerrainTask(RLTask):
             torch.norm(self.thigh_contact_forces, dim=-1)
             > 0.1
         )
-        calf_contact = (torch.norm(self.calf_contact_forces, dim=-1) > 0.1)
-        total_contact = thigh_contact + calf_contact
-        return torch.sum(total_contact, dim=-1)
+        # calf_contact = (torch.norm(self.calf_contact_forces, dim=-1) > 0.1)
+        # total_contact = thigh_contact + calf_contact
+        return torch.sum(thigh_contact, dim=-1)
 
     def _reward_termination(self):
         # Terminal reward / penalty
