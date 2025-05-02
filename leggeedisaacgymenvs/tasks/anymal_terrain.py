@@ -1217,13 +1217,11 @@ class AnymalTerrainTask(RLTask):
                     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
                 torques = torques * self.motor_strengths
 
-                joint_vel = self.dof_vel        
+                joint_vel = self.dof_vel 
                 max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
-                zero      = torch.zeros_like(max_eff)
-                max_eff   = torch.clip(max_eff, zero, self.torque_limits)
+                max_eff   = torch.clip(max_eff, 0.0, self.torque_limits)
                 min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
-                zero_min  = torch.zeros_like(min_eff)
-                min_eff   = torch.clip(min_eff, -self.torque_limits, zero_min)
+                min_eff   = torch.clip(min_eff, -self.torque_limits, 0.0)
                 torques = torch.clip(torques, min_eff, max_eff)
 
                 self._anymals.set_joint_efforts(torques)
@@ -1346,11 +1344,12 @@ class AnymalTerrainTask(RLTask):
         # 5) Initialize episode_sums _dict_ before populating it
         self.episode_sums = {}
         # active rewards
-        for name in self.reward_names:
+        for name in self.reward_scales.keys():
             self.episode_sums[name] = torch.zeros(
                 self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
             )
 
+        
         # inactive rewards, prefixed
         for name in self.inactive_reward_names:
             self.episode_sums[f"inactive_{name}"] = torch.zeros(

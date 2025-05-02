@@ -5,7 +5,7 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:2048,${...num_envs}}
   clipObservations: 100
-  clipActions: 5
+  # clipActions: 2
 
   commands:
     VelocityCurriculum: False
@@ -219,7 +219,7 @@ env:
         Looks: False
 
   baseInitState:
-    pos: [0.0, 0.0, 0.42] # x,y,z [m]
+    pos: [0.0, 0.0, 0.42] # x,y,z [m] .42
     rot: [1.0, 0.0, 0.0, 0.0] # w,x,y,z [quat]
     vLinear: [0.0, 0.0, 0.0] # x,y,z [m/s]
     vAngular: [0.0, 0.0, 0.0] # x,y,z [rad/s]
@@ -277,7 +277,7 @@ env:
       collision: -1. #-1.
       action_rate: -0.01
       dof_pos_limits: -10.0
-      termination: -20.0
+      # termination: -20.0
 
     onlyPositiveRewards: True
     baseHeightTarget: 0.25
@@ -296,7 +296,7 @@ env:
     contactForceScale: 0.01
 
     # noise
-    addNoise: True
+    addNoise: False
     noiseLevel: 1.0 # scales other values
     dofPositionNoise: 0.01
     dofVelocityNoise: 1.5
