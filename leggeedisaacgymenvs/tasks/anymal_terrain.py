@@ -1302,16 +1302,16 @@ class AnymalTerrainTask(RLTask):
             # after that, always zero it
             self.progress_buf[env_ids] = 0  
 
-        if self.curriculum
+        if self.curriculum:
             self.extras["episode"]["current_terrain_level"] = torch.mean(self.terrain_levels.float())
             self.extras["episode"]["unlocked_terrain_levels"] = torch.mean(self.unlocked_terrain_levels.float())
         self.extras["time_outs"] = self.timeout_buf
-        self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
-        self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
-        self.extras["episode"]["min_command_y_vel"]   = torch.min(self.commands[:, 1])
-        self.extras["episode"]["max_command_y_vel"]   = torch.max(self.commands[:, 1])
-        self.extras["episode"]["min_command_yaw_vel"] = torch.min(self.commands[:, 2])
-        self.extras["episode"]["max_command_yaw_vel"] = torch.max(self.commands[:, 2])
+        # self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
+        # self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
+        # self.extras["episode"]["min_command_y_vel"]   = torch.min(self.commands[:, 1])
+        # self.extras["episode"]["max_command_y_vel"]   = torch.max(self.commands[:, 1])
+        # self.extras["episode"]["min_command_yaw_vel"] = torch.min(self.commands[:, 2])
+        # self.extras["episode"]["max_command_yaw_vel"] = torch.max(self.commands[:, 2])
         self.extras["episode"]["min_action"] = torch.min(self.actions)
         self.extras["episode"]["max_action"] = torch.max(self.actions)
     
@@ -1356,12 +1356,12 @@ class AnymalTerrainTask(RLTask):
                 torques = self.Kp * self.Kp_factors * self.motor_strengths[0] * (
                     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.motor_strengths[1] * self.dof_vel
 
-                joint_vel = self.dof_vel.clone()
-                max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
-                max_eff   = torch.clip(max_eff, 0.0, self.torque_limits)
-                min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
-                min_eff   = torch.clip(min_eff, -self.torque_limits, 0.0)
-                torques = torch.clip(torques, min_eff, max_eff)
+                # joint_vel = self.dof_vel.clone()
+                # max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
+                # max_eff   = torch.clip(max_eff, 0.0, self.torque_limits)
+                # min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
+                # min_eff   = torch.clip(min_eff, -self.torque_limits, 0.0)
+                torques = torch.clip(torques, -self.torque_limits, self.torque_limits)
 
                 self._anymals.set_joint_efforts(torques)
                 self.torques = torques
@@ -1483,11 +1483,11 @@ class AnymalTerrainTask(RLTask):
             )
 
         
-        # inactive rewards, prefixed
-        for name in self.inactive_reward_names:
-            self.episode_sums[f"inactive_{name}"] = torch.zeros(
-                self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
-            )
+        # # inactive rewards, prefixed
+        # for name in self.inactive_reward_names:
+        #     self.episode_sums[f"inactive_{name}"] = torch.zeros(
+        #         self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
+        #     )
 
     def compute_reward(self):
         """ Compute rewards
@@ -1495,11 +1495,11 @@ class AnymalTerrainTask(RLTask):
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
-        # 1) log inactive rewards under “inactive_<name>”
-        for name in self.inactive_reward_names:
-            raw = getattr(self, f"_reward_{name}")()
-            # e.g. store in extras or episode_sums:
-            self.episode_sums[f"inactive_{name}"] += raw * self.dt
+        # # 1) log inactive rewards under “inactive_<name>”
+        # for name in self.inactive_reward_names:
+        #     raw = getattr(self, f"_reward_{name}")()
+        #     # e.g. store in extras or episode_sums:
+        #     self.episode_sums[f"inactive_{name}"] += raw * self.dt
 
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]

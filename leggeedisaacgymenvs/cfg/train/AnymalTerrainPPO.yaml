@@ -16,7 +16,7 @@ policy:
   num_leg_actions: 12
 
 algorithm:
-  value_loss_coef: 2.0
+  value_loss_coef: 1.0
   use_clipped_value_loss: True
   clip_param: 0.2
   entropy_coef: 0.01 #0.01
@@ -26,7 +26,6 @@ algorithm:
   schedule: 'adaptive' #fixed #'adaptive'
   gamma: 0.99
   lam: 0.95
-  desired_kl: 0.01 #0.008 #null #0.01
   desired_kl: 0.01 #0.008 #null #0.01
   bounds_loss_coef: 0.0
   max_grad_norm: 1.0
