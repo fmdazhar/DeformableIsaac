@@ -51,7 +51,8 @@ class VecEnvBase(gym.Env):
 
         if launch_simulation_app:
             if experience is None:
-                experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.gym.kit'
+                import leggeedisaacgymenvs
+                experience = os.path.abspath(os.path.join(os.path.dirname(leggeedisaacgymenvs.__file__), '../apps/omni.isaac.sim.python.gym.camera.kit'))
                 if enable_livestream:
                     experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.gym.livestream.kit'
                 else:
