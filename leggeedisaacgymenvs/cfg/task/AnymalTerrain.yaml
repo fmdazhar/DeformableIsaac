@@ -12,16 +12,16 @@ env:
     limit_vel_x:     [-10.0, 10.0]
     limit_vel_y:     [-0.6, 0.6]
     limit_vel_yaw:   [-1, 1]
-    lin_vel_x:     [-0.5, 0.5]
-    lin_vel_y:     [-0.5, 0.5]
-    ang_vel_yaw:   [-0.5, 0.5]
+    lin_vel_x:     [-1, 1]
+    lin_vel_y:     [-1, 1]
+    ang_vel_yaw:   [-1, 1]
     curriculum_thresholds:
       delta_lin_vel_x: 0.4
       tracking_length: 2
       tracking_lin_vel_high: 0.8
-      tracking_lin_vel_low: 0.6
+      tracking_lin_vel_low: 0.7
       tracking_ang_vel_high: 0.8
-      tracking_ang_vel_low: 0.6
+      tracking_ang_vel_low: 0.7
       tracking_eps_length: 0.9
 
   terrain:
@@ -37,8 +37,8 @@ env:
     curriculum: False
     curriculum_thresholds:
       tracking_length: 10
-      tracking_lin_vel_high: 0.8
-      tracking_ang_vel_high: 0.8
+      tracking_lin_vel_high: 0.7
+      tracking_ang_vel_high: 0.7
       tracking_eps_length: 0.9
 
     oobActive: False

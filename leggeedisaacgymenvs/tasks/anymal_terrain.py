@@ -23,6 +23,8 @@ from leggeedisaacgymenvs.tasks.utils.curriculum import RewardThresholdCurriculum
 from pxr import Usd, UsdGeom, UsdPhysics, PhysxSchema, UsdLux, Sdf, Gf, UsdShade, Vt
 from omni.physx.scripts import physicsUtils, particleUtils
 import omni.kit.commands
+import torch.nn.functional as F
+
 
 class AnymalTerrainTask(RLTask):
     def __init__(self, name, sim_config, env, offset=None) -> None:
@@ -1517,8 +1519,6 @@ class AnymalTerrainTask(RLTask):
         Build a 'proprio_obs' block and (optionally) a 'heights' block,
         then combine them in obs_buf. Only 'proprio_obs' is put into obs_history.
         """
-        foot_force = torch.norm(self.foot_contact_forces[:, self.feet_indices, :], dim=2)  # (N,4)
-        contact_state = (foot_force > 1.0).float()     
         proprio_obs = torch.cat((
             self.base_lin_vel * self.lin_vel_scale,
             self.base_ang_vel * self.ang_vel_scale,
@@ -1527,7 +1527,7 @@ class AnymalTerrainTask(RLTask):
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
             self.actions,
-            contact_state
+            self.contact_filt.float()
         ), dim=-1)  
 
         # 2) Add noise (only on proprio)
@@ -1559,15 +1559,14 @@ class AnymalTerrainTask(RLTask):
                 (self.payloads.unsqueeze(1) - self.payload_shift) * self.payload_scale,
                 (self.com_displacements - self.com_shift) * self.com_scale,
                 (motor_strength_flat - self.motor_strength_shift) * self.motor_strength_scale,
-                # (self.motor_offsets - self.motor_offset_shift) * self.motor_offset_scale,
             ]
             # contact normals (unit vectors)  ---------
-            eps = 1e-8
-            normals_mag = foot_force.unsqueeze(-1).clamp_min(eps)
-            raw_normals = self.foot_contact_forces[:, self.feet_indices, :] / normals_mag                      # (N,4,3)
-            contact_normals = raw_normals * contact_state.unsqueeze(-1)  
-            priv_parts.append(contact_normals.view(self.num_envs, -1))   # flatten to (N,12)
-
+            forces = self.foot_contact_forces.view(self.num_envs, self.num_feet, 3) # foot_forces: [N, 4, 3]
+            normals = F.normalize(forces, p=2, dim=-1, eps=1e-8)    # [N,4,3]
+            mask = self.contact_filt.unsqueeze(-1)
+            contact_normals = normals * mask                         # [N,4,3]
+            priv_parts.append(contact_normals.reshape(self.num_envs, -1))
+        
         # compliance (soft contacts)
         if self.priv_compliance and self._compliance_active:
             priv_parts += [
