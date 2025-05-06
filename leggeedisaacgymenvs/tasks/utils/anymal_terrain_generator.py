@@ -23,8 +23,8 @@ class Terrain:
             self.env_rows = cfg["numLevels"]
             self.env_cols = cfg["numTerrains"]
         else:
-            self.env_rows = len(terrain_types)                # number of rows = number of unique terrain "types"
-            self.env_cols = max(t["count"] for t in terrain_types)  # total columns = max of 'count' across all types
+            self.env_rows = sum(tt.get("row_count", 1) for tt in terrain_types)
+            self.env_cols = max(t["col_count"] for t in terrain_types)  # total columns = max of 'count' across all types
         
         self.num_maps = self.env_rows * self.env_cols
         # Each sub-rectangle (sub-terrain) dimensions in "heightfield" pixels
@@ -64,10 +64,11 @@ class Terrain:
 
         # All possible terrain type definitions from config:
         terrain_type_list = self.cfg["terrain_types"]  # e.g. a list of dicts
-
-        for i, terrain_type_info in enumerate(terrain_type_list):
+        current_row = 0
+        for terrain_type_info in terrain_type_list:
             name = str(terrain_type_info["name"])
-            count = terrain_type_info["count"]  # Number of terrains of this type
+            row_count = terrain_type_info["row_count"]  # Number of rows of this type
+            col_count = terrain_type_info["col_count"]  # Number of terrains of this type
             level = terrain_type_info["level"]
             size = terrain_type_info.get("size", 0.0)
             depth = terrain_type_info.get("depth", 0.0)
@@ -79,78 +80,80 @@ class Terrain:
                     .get(f"system{system}", {})
                     .get("particle_grid_fluid", False)
             )
-            for j in range(count):  # Generate `count` terrains for this type
-                idx = len(self.terrain_details)  # Unique terrain index
-                terrain = SubTerrain(
-                    "terrain",
-                    width=self.width_per_env_pixels,
-                    length=self.length_per_env_pixels,
-                    vertical_scale=self.vertical_scale,
-                    horizontal_scale=self.horizontal_scale,
-                )
-
-                # Assign terrain heightfield based on type
-                if name == "flat":
-                    flat_terrain(terrain, height_meters=0.0)
-                elif name == "rough":
-                    random_uniform_terrain(terrain, min_height=-0.1, max_height=0.1, step=0.025, downsampled_scale=0.2)                
-                elif name == "central_depression_terrain":
-
-                    central_depression_terrain(
-                        terrain, depression_depth=-abs(depth), platform_height=0.0, depression_size=size
+            for r in range(row_count):
+                for c in range(col_count):                
+                    idx = len(self.terrain_details)  # Unique terrain index
+                    terrain = SubTerrain(
+                        "terrain",
+                        width=self.width_per_env_pixels,
+                        length=self.length_per_env_pixels,
+                        vertical_scale=self.vertical_scale,
+                        horizontal_scale=self.horizontal_scale,
                     )
-                else:
-                    flat_terrain(terrain, height_meters=0.0)
 
-                # Compute terrain placement in row i, col j
-                start_x = self.border + i * self.length_per_env_pixels
-                end_x = self.border + (i + 1) * self.length_per_env_pixels
-                start_y = self.border + j * self.width_per_env_pixels
-                end_y = self.border + (j + 1) * self.width_per_env_pixels
+                    # Assign terrain heightfield based on type
+                    if name == "flat":
+                        flat_terrain(terrain, height_meters=0.0)
+                    elif name == "rough":
+                        random_uniform_terrain(terrain, min_height=-0.1, max_height=0.1, step=0.025, downsampled_scale=0.2)                
+                    elif name == "central_depression_terrain":
 
-                self.height_field_raw[start_x:end_x, start_y:end_y] = terrain.height_field_raw
+                        central_depression_terrain(
+                            terrain, depression_depth=-abs(depth), platform_height=0.0, depression_size=size
+                        )
+                    else:
+                        flat_terrain(terrain, height_meters=0.0)
+
+                    # Compute terrain placement in row i, col j
+                    start_x = self.border + (current_row + r) * self.length_per_env_pixels
+                    end_x = start_x + self.length_per_env_pixels
+                    start_y = self.border + c * self.width_per_env_pixels
+                    end_y = start_y + self.width_per_env_pixels
+
+                    self.height_field_raw[start_x:end_x, start_y:end_y] = terrain.height_field_raw
 
 
-                # bounding region in HF indices:
-                if name == "central_depression_terrain":
-                    lx0 = start_x + terrain.depression_indices["start_x"]
-                    lx1 = start_x + terrain.depression_indices["end_x"]
-                    ly0 = start_y + terrain.depression_indices["start_y"]
-                    ly1 = start_y + terrain.depression_indices["end_y"]
-                else:
-                    lx0, lx1, ly0, ly1 = (start_x, end_x, start_y, end_y)
+                    # bounding region in HF indices:
+                    if name == "central_depression_terrain":
+                        lx0 = start_x + terrain.depression_indices["start_x"]
+                        lx1 = start_x + terrain.depression_indices["end_x"]
+                        ly0 = start_y + terrain.depression_indices["start_y"]
+                        ly1 = start_y + terrain.depression_indices["end_y"]
+                    else:
+                        lx0, lx1, ly0, ly1 = (start_x, end_x, start_y, end_y)
 
-                # Store the origin of the terrain
-                env_origin_x = (i + 0.5) * self.env_length
-                env_origin_y = (j + 0.5) * self.env_width
-                center_x1 = int((self.env_length / 2 - 1) / self.horizontal_scale)
-                center_x2 = int((self.env_length / 2 + 1) / self.horizontal_scale)
-                center_y1 = int((self.env_width / 2 - 1) / self.horizontal_scale)
-                center_y2 = int((self.env_width / 2 + 1) / self.horizontal_scale)
-                env_origin_z = np.max(
-                    terrain.height_field_raw[center_x1:center_x2, center_y1:center_y2]
-                ) * self.vertical_scale
-                self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
-                terrain_type = self.infer_terrain_type(compliant, particles, fluid)
+                    # Store the origin of the terrain
+                    env_origin_x = ((current_row + r) + 0.5) * self.env_length
+                    env_origin_y = (c + 0.5) * self.env_width
+                    center_x1 = int((self.env_length / 2 - 1) / self.horizontal_scale)
+                    center_x2 = int((self.env_length / 2 + 1) / self.horizontal_scale)
+                    center_y1 = int((self.env_width / 2 - 1) / self.horizontal_scale)
+                    center_y2 = int((self.env_width / 2 + 1) / self.horizontal_scale)
+                    env_origin_z = np.max(
+                        terrain.height_field_raw[center_x1:center_x2, center_y1:center_y2]
+                    ) * self.vertical_scale
+                    self.env_origins[current_row + r, c] = [env_origin_x, env_origin_y, env_origin_z]
+                    terrain_type = self.infer_terrain_type(compliant, particles, fluid)
 
-                # Store terrain details
-                self.terrain_details.append((
-                    idx,
-                    level,
-                    i,
-                    j,
-                    terrain_type,
-                    particles,
-                    compliant,
-                    system,
-                    depth,
-                    size,
-                    lx0,
-                    lx1,
-                    ly0,
-                    ly1,
-                    fluid,
-                ))
+                    # Store terrain details
+                    self.terrain_details.append((
+                        idx,
+                        level,
+                        current_row+r,
+                        c,
+                        terrain_type,
+                        particles,
+                        compliant,
+                        system,
+                        depth,
+                        size,
+                        lx0,
+                        lx1,
+                        ly0,
+                        ly1,
+                        fluid,
+                    ))
+            current_row += row_count
 
     @staticmethod
     def infer_terrain_type(compliant: int, particles: int, fluid: bool) -> int:

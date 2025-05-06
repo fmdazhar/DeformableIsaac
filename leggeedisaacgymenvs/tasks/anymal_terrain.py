@@ -40,7 +40,7 @@ class AnymalTerrainTask(RLTask):
         self.update_config()
 
         self._num_actions = 12
-        self._num_proprio = 48 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 
+        self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4
         self._num_privileged_observations = None
         # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
@@ -111,13 +111,30 @@ class AnymalTerrainTask(RLTask):
         self.reward_scales = self._task_cfg["env"]["learn"]["scales"]
 
         # command ranges
+
+        # commands:
+        #     VelocityCurriculum: False
+        #     limit_vel_x:     [-10.0, 10.0]
+        #     limit_vel_y:     [-0.6, 0.6]
+        #     limit_vel_yaw:   [-1, 1]
+        #     lin_vel_x:     [-0.6, 0.6]
+        #     lin_vel_y:     [-0.6, 0.6]
+        #     ang_vel_yaw:   [-0.6, 0.6]
+        #     curriculum_thresholds:
+        #     delta_lin_vel_x: 0.4
+        #     tracking_length: 2
+        #     tracking_lin_vel: 0.8
+        #     tracking_ang_vel: 0.8
+        #     tracking_eps_length: 0.9
+        self.vel_curriculum = self._task_cfg["env"]["commands"]["VelocityCurriculum"]
         self.command_x_range = self._task_cfg["env"]["commands"]["lin_vel_x"]
         self.command_y_range = self._task_cfg["env"]["commands"]["lin_vel_y"]
         self.command_yaw_range = self._task_cfg["env"]["commands"]["ang_vel_yaw"]
         self.limit_vel_x = self._task_cfg["env"]["commands"]["limit_vel_x"]
         self.limit_vel_y = self._task_cfg["env"]["commands"]["limit_vel_y"]
         self.limit_vel_yaw = self._task_cfg["env"]["commands"]["limit_vel_yaw"]
-        self.vel_curriculum = self._task_cfg["env"]["commands"]["VelocityCurriculum"]
+        self.command_curriculum_cfg  = self._task_cfg["env"]["commands"]["curriculum_thresholds"]
+        self.terrain_curriculum_cfg  = self._task_cfg["env"]["terrain"]["curriculum_thresholds"]
 
 
         # base init state
@@ -169,8 +186,8 @@ class AnymalTerrainTask(RLTask):
         self.Kp = self._task_cfg["env"]["control"]["stiffness"]
         self.Kd = self._task_cfg["env"]["control"]["damping"]
         self.curriculum = self._task_cfg["env"]["terrain"]["curriculum"]
-        self.teleport_active = self._task_cfg["env"]["terrain"]["teleportActive"]
-        self.teleport_buffer = self._task_cfg["env"]["terrain"]["teleportBuffer"]
+        self.oob_active = self._task_cfg["env"]["terrain"]["oobActive"]
+        self.oob_buffer = self._task_cfg["env"]["terrain"]["oobBuffer"]
         self.measure_heights = self._task_cfg["env"]["terrain"]["measureHeights"]
         self.debug_heights = self._task_cfg["env"]["terrain"]["debugHeights"]
 
@@ -211,7 +228,7 @@ class AnymalTerrainTask(RLTask):
             self.pbd_by_sys = {}
 
         self._num_priv = (
-            (40 if self.priv_base else 0)
+            (52 if self.priv_base else 0)
         + (8  if (self._compliance_active and self.priv_compliance) else 0)
         + (self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0)
         )
@@ -229,6 +246,39 @@ class AnymalTerrainTask(RLTask):
         active_system_ids = {int(s.item())
                          for s in torch.unique(self.terrain_details[:, 7])
                          if int(s.item()) > 0}
+        sro_vals = []
+        for sid in active_system_ids:
+            system_name = f"system{sid}"
+            fluid = self._particle_cfg[system_name].get("particle_grid_fluid", False)
+            contact_offset = self._particle_cfg[system_name].get("particle_system_contact_offset", None)
+            particle_contact_offset = self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None)
+            fluid_rest_offset = self._particle_cfg[system_name].get("particle_system_fluid_rest_offset", None)
+            solid_rest_offset = self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None)
+            rest_offset = self._particle_cfg[system_name].get("particle_system_rest_offset", None)
+
+            # Raise an error if it is a fluid system and no particle contact offset is provided.
+            if fluid and particle_contact_offset is None:
+                raise ValueError("For fluid systems, 'particle_system_particle_contact_offset' must be provided.")
+
+            if fluid:
+                if fluid_rest_offset is None :
+                    fluid_rest_offset = 0.99 * 0.6 * particle_contact_offset
+                    self._particle_cfg[system_name]["particle_system_fluid_rest_offset"] = fluid_rest_offset
+
+                # For example, for rest offset and solid rest offset, if they are not provided:
+                if rest_offset is None :
+                    rest_offset = 0.99 * particle_contact_offset
+                    self._particle_cfg[system_name]["particle_system_rest_offset"] = rest_offset
+
+                if solid_rest_offset is None :
+                    solid_rest_offset = 0.99 * particle_contact_offset
+                    self._particle_cfg[system_name]["particle_system_solid_rest_offset"] = solid_rest_offset
+
+                if contact_offset is None :
+                    contact_offset = 1 * particle_contact_offset
+                    self._particle_cfg[system_name]["particle_system_contact_offset"] = contact_offset
+            sro_vals.append(solid_rest_offset)
+
 
         systems_cfg = (
                 self._task_cfg["env"]["randomizationRanges"]
@@ -258,6 +308,14 @@ class AnymalTerrainTask(RLTask):
             
         self.pbd_param_names = sorted(merged.keys())
         self.pbd_range = [merged[k] for k in self.pbd_param_names]
+
+        self.pbd_param_names.append("solid_rest_offset")
+        if sro_vals:
+            min_sro, max_sro = min(sro_vals), max(sro_vals)
+        else:
+            min_sro = max_sro = 0.0
+        self.pbd_range.append([min_sro, max_sro])
+
         self.pbd_param_names += ["particles_present", "fluid_present"]
         self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
 
@@ -289,7 +347,7 @@ class AnymalTerrainTask(RLTask):
         noise_vec[12:24] = self._task_cfg["env"]["learn"]["dofPositionNoise"] * noise_level * self.dof_pos_scale
         noise_vec[24:36] = self._task_cfg["env"]["learn"]["dofVelocityNoise"] * noise_level * self.dof_vel_scale
         noise_vec[36:48] = 0.0  # previous actions
-        # noise_vec[48:52] = 0.0 # contact force states
+        noise_vec[48:52] = 0.0 # contact force states
 
         return noise_vec
         
@@ -339,81 +397,142 @@ class AnymalTerrainTask(RLTask):
             torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
         )
 
-    def _init_command_distribution(self):
-        unique_types = torch.unique(self.terrain_types).cpu().tolist()
-        self.category_names = [f"terrain_{t}" for t in unique_types]
-        self.type2idx      = {t: i for i, t in enumerate(unique_types)}
-        self.curricula = [
-            RewardThresholdCurriculum(
-                seed = self._cfg["commands"]["curriculum_seed"],
-                x_vel=(self.limit_vel_x[0],   self.limit_vel_x[1],   self._cfg["commands"]["num_bins_vel_x"]),
-                y_vel=(self.limit_vel_y[0],   self.limit_vel_y[1],   self._cfg["commands"]["num_bins_vel_y"]),
-                yaw_vel=(self.limit_vel_yaw[0], self.limit_vel_yaw[1], self._cfg["commands"]["num_bins_vel_yaw"]),
-            )
-            for _ in unique_types
-        ]
+    def _init_command_ranges_by_terrain(self):
+        """
+        Build a lookup table that holds per-terrain-TYPE command ranges.
+
+        Shape: [num_terrain_types, 6]  
+            (min_x, max_x,  min_y, max_y,  min_yaw, max_yaw)
+
+        The table is stored in  `self.command_ranges_by_terrain`
+        and initialised with the *global* command ranges that come from
+        the YAML (self.command_*_range).
+        """
+        unique_ids = torch.unique(self.terrain_details[:, 4]).long()
+        self._id2row = {int(t.item()): i for i, t in enumerate(unique_ids)}
         
-        self.env_command_categories = torch.as_tensor(
-        [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
-        dtype=torch.long,
-        )        
-        self.env_command_bins = np.zeros(self.num_envs, dtype=np.int64)
+        base = torch.tensor(
+            [ self.command_x_range[0], self.command_x_range[1],
+            self.command_y_range[0], self.command_y_range[1],
+            self.command_yaw_range[0], self.command_yaw_range[1] ],
+            dtype=torch.float, device=self.device
+        )
 
-        # 4. Initialise every curriculum’s range once
-        low  = np.array([self.command_x_range[0], self.command_y_range[0], self.command_yaw_range[0]])
-        high = np.array([self.command_x_range[1], self.command_y_range[1], self.command_yaw_range[1]])
-        for cur in self.curricula:
-            cur.set_to(low=low, high=high)
+        # replicate →  [T, 6]
+        self.command_ranges_by_terrain = base.unsqueeze(0).repeat(len(unique_ids), 1).clone()
 
-
-    def _resample_commands(self, env_ids):
+    
+    def update_command_curriculum(self, env_ids: torch.Tensor) -> None:
         """
-        Resample (x vel, y vel, yaw vel) commands for the envs in `env_ids`.
-        Curriculum progress is now estimated from the *last* entry of the
-        tracking-history buffers instead of the aggregated episode‐sums.
+        Expand / contract the allowable **x-linear-velocity** range *separately*
+        for every terrain **type** that is present in `env_ids`.
+
+        Strategy – identical to your previous implementation:
+        • look at the last `window_size` episodes for every env  
+        • if mean tracking-reward & episode-length are high ⇒ widen range  
+        • if they are low                                    ⇒ narrow range
         """
-        if len(env_ids) == 0:
+        if not env_ids.numel():
             return
-        # Episode statistics for the selected envs ------------------------
-        lin_idx = (self.tracking_lin_vel_x_history_idx[env_ids] - 1) % self.tracking_history_len
-        ang_idx = (self.tracking_ang_vel_x_history_idx[env_ids] - 1) % self.tracking_history_len
-        len_idx = (self.ep_length_history_idx      [env_ids] - 1) % self.tracking_history_len
 
-        last_lin = self.tracking_lin_vel_x_history[env_ids, lin_idx]             # (B,)
-        last_ang = self.tracking_ang_vel_x_history[env_ids, ang_idx]
-        last_len = self.ep_length_history      [env_ids, len_idx].clamp_min(1e-6)
+        delta_lin   = self.command_curriculum_cfg["delta_lin_vel_x"]
+        window_size = self.command_curriculum_cfg["tracking_length"]
+        tracking_lin_vel_high   =  self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt
+        tracking_lin_vel_low   = self.command_curriculum_cfg["tracking_lin_vel_low"] * self.reward_scales["tracking_lin_vel"] / self.dt
+        tracking_ang_vel_high   =  self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
+        tracking_ang_vel_low   = self.command_curriculum_cfg["tracking_ang_vel_low"] * self.reward_scales["tracking_ang_vel"] / self.dt
+        len_ok      = self.command_curriculum_cfg["tracking_eps_length"]
 
-        # Curriculum success thresholds
-        thr = [
-            self._cfg["commands"]["curriculum_thresholds"]["tracking_lin_vel"],
-            self._cfg["commands"]["curriculum_thresholds"]["tracking_ang_vel"],
-            self._cfg["commands"]["curriculum_thresholds"]["ep_length"]
-        ]
+        # ── gather helper indices for “last N” circular-buffer access
+        last = torch.stack(
+            [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
+            for k in range(window_size) ],
+            dim=0
+        )                                                      # [N, num_envs]
 
-        # Split envs by terrain-type curriculum --------------------------
-        cats = self.env_command_categories[env_ids.cpu()]                        # (B,)
-        for cur_idx in torch.unique(cats):
-            mask = (cats == cur_idx)
-            sub_envs = env_ids[mask]                                             # tensor on device
-            if sub_envs.numel() == 0:
+        # ── process every terrain TYPE seen in env_ids
+        terr_types    = self.terrain_types[env_ids]            # (len(env_ids),)
+        unique_types  = torch.unique(terr_types)
+
+        for t in unique_types:
+            mask = terr_types == t
+            these_envs = env_ids[mask]                         # 1-D tensor
+            if not these_envs.numel():
                 continue
-            cur = self.curricula[int(cur_idx)]
-            rewards = torch.stack([
-                last_lin[mask],                                                  
-                last_ang[mask],                                                  
-                last_len[mask],                                                  
-            ], dim=1).mean(0).tolist()
-            # Let the curriculum object update its bin statistics
-            old_bins = self.env_command_bins[sub_envs.cpu().numpy()]
-            cur.update(old_bins, rewards, thr,
-                            local_range=np.array([0.55, 0.55, 0.55]))
 
-            # Sample new commands & assign them
-            new_cmds, new_bins = cur.sample(batch_size=sub_envs.numel())
-            self.env_command_bins     [sub_envs.cpu().numpy()] = new_bins
-            self.commands[sub_envs, :3] = torch.tensor(new_cmds[:, :3],
-                                                            device=self.device)
+            # ---- pull the last-window rewards & episode lengths, shape: [W, B]
+            idx = last[:, these_envs]
+            tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[these_envs.unsqueeze(0), idx]
+            tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[these_envs.unsqueeze(0), idx]
+            leng  = self.ep_length_history        [these_envs.unsqueeze(0), idx]
 
+            # ignore if any of the last-window slots are still zero
+            if not ((tracking_ang_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
+                continue
+
+            r_mean_lin = tracking_lin_vel_x_history.mean()
+            r_mean_ang = tracking_ang_vel_x_history.mean()
+            l_mean = leng.float().mean()
+
+            # ---- choose direction
+            if (r_mean_lin >= tracking_lin_vel_high) and (r_mean_ang >= tracking_ang_vel_high) and (l_mean >= len_ok):
+                direction = +1           # become harder ⇒ widen range
+            elif (r_mean_lin < tracking_lin_vel_low) or (r_mean_ang < tracking_ang_vel_low) or (l_mean <  len_ok):
+                direction = -1           # become easier ⇒ shrink range
+            else:
+                direction = 0
+
+            if direction == 0:
+                continue
+
+            # ---- apply the adjustment **clamped** to absolute limits
+            row = self._id2row[int(t.item())]
+            cur_min = self.command_ranges_by_terrain[row, 0]
+            cur_max = self.command_ranges_by_terrain[row, 1]
+
+            if direction == +1:
+                new_min = torch.clamp(cur_min - delta_lin, min=self.limit_vel_x[0])
+                new_max = torch.clamp(cur_max + delta_lin, max=self.limit_vel_x[1])
+            else:
+                new_min = torch.clamp(cur_min + delta_lin, max=self.command_x_range[0])
+                new_max = torch.clamp(cur_max - delta_lin, min=self.command_x_range[1])
+
+            self.command_ranges_by_terrain[row, 0] = new_min
+            self.command_ranges_by_terrain[row, 1] = new_max
+
+            self.tracking_lin_vel_x_history      [these_envs] = 0.0
+            self.tracking_lin_vel_x_history_idx  [these_envs] = 0
+            self.tracking_lin_vel_x_history_full [these_envs] = False
+
+            self.ep_length_history        [these_envs] = 0.0
+            self.ep_length_history_idx    [these_envs] = 0
+            self.ep_length_history_full   [these_envs] = False
+
+    def _resample_commands(self, env_ids: torch.Tensor) -> None:
+        """
+        Resample the x-linear-velocity command for every env in `env_ids` that
+        has a terrain level > 0. The new command is sampled from the range
+        defined by the terrain type of the env.
+        """
+        if not env_ids.numel():
+            return
+
+        # ---- get the terrain TYPE for each env in `env_ids`
+        terr_types = self.terrain_types[env_ids]                # (len(env_ids),)
+        unique_types = torch.unique(terr_types)                 # (len(unique_types),)
+
+        # ---- resample the x-linear-velocity command for each TYPE
+        for t in unique_types:
+            mask = terr_types == t
+            these_envs = env_ids[mask]                         # 1-D tensor
+            if not these_envs.numel():
+                continue
+
+            row = self._id2row[int(t.item())]
+            min_x, max_x = self.command_ranges_by_terrain[row, 0:2]
+
+            self.commands[these_envs, 0] = torch.rand(
+                len(these_envs), device=self.device, dtype=torch.float) * (max_x - min_x) + min_x
 
     def update_terrain_level(self, env_ids):
         
@@ -423,19 +542,17 @@ class AnymalTerrainTask(RLTask):
             valid_envs  = env_ids[full_mask]                                    # maybe empty
 
             if valid_envs.numel():                                             # guard for speed
-                # STEP 2 ── compute mean reward for those envs and decide who levels up
                 mean_rewards = self.tracking_lin_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
                 promote_mask = mean_rewards > threshold
                 promote_envs = valid_envs[promote_mask]                         # again maybe empty
 
                 if promote_envs.numel():
                     # (a) bump terrain level, but clip to [0, max_terrain_level-1]
-                    self.terrain_levels[promote_envs] = torch.clamp(
-                        self.terrain_levels[promote_envs] + 1,
-                        0, self.max_terrain_level - 1,
+                    self.unlocked_levels[promote_envs] = torch.clamp(
+                    self.unlocked_levels[promote_envs] + 1,
+                    max=self.max_terrain_level - 1
                     )
 
-                    # STEP 3 ── reset all history buffers for those envs in one shot
                     self.tracking_lin_vel_x_history      [promote_envs] = 0.0
                     self.tracking_lin_vel_x_history_idx  [promote_envs] = 0
                     self.tracking_lin_vel_x_history_full [promote_envs] = False
@@ -444,13 +561,10 @@ class AnymalTerrainTask(RLTask):
                     self.ep_length_history_idx    [promote_envs] = 0
                     self.ep_length_history_full   [promote_envs] = False
 
-                # Robots that solve the last level are sent to a random xfone
-        self.terrain_levels[env_ids] = torch.where(self.terrain_levels[env_ids] >= self.max_terrain_level,
-                                                   torch.randint_like(self.terrain_levels[env_ids],
-                                                                      low=self.min_terrain_level,
-                                                                      high=self.max_terrain_level),
-                                                   torch.clip(self.terrain_levels[env_ids],
-                                                              self.min_terrain_level))  # (the minumum level is zero)
+        # ── 2. Sample a level 0 … unlocked (inclusive) ───────────────
+        span     = self.unlocked_levels[env_ids] - self.min_terrain_level + 1              # ≥ 1 always
+        rnd      = torch.floor(torch.rand_like(span.float()) * span.float()).long()
+        self.terrain_levels[env_ids] = rnd + self.min_terrain_level
 
         new_levels = self.terrain_levels[env_ids]
         unique_levels, inverse_idx = torch.unique(new_levels, return_inverse=True)
@@ -536,6 +650,7 @@ class AnymalTerrainTask(RLTask):
     def get_terrain(self, create_mesh=True):
         self.env_origins = torch.zeros((self.num_envs, 3), device=self.device, requires_grad=False)
         self.terrain_levels = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
+        self.unlocked_levels = torch.zeros_like(self.terrain_levels)
         self._create_trimesh(create_mesh=create_mesh)
         levels = self.terrain_details[:, 1].long()  # shape: (N, ) where N=# of terrain blocks
         unique_levels = torch.unique(levels)
@@ -574,9 +689,9 @@ class AnymalTerrainTask(RLTask):
             env_ids = env_ids.to(self.device)
 
         if self._task_cfg["env"]["randomizationRanges"]["randomizeMotorStrength"]:
-            self.motor_strengths[env_ids, :] = torch.rand(len(env_ids), dtype=torch.float, device=self.device,
-                                                     requires_grad=False).unsqueeze(1) * (
-                                                  self.motor_strength_range[1] - self.motor_strength_range[0]) + self.motor_strength_range[0]
+            lo, hi = self.motor_strength_range
+            self.motor_strengths[:, env_ids, :] = (hi - lo) * torch.rand(
+                2, len(env_ids), self.num_dof, device=self.device) + lo  
         if self._task_cfg["env"]["randomizationRanges"]["randomizeMotorOffset"]:
             self.motor_offsets[env_ids, :] = torch.rand(len(env_ids), self.num_dof, dtype=torch.float,
                                                         device=self.device, requires_grad=False) * (
@@ -814,6 +929,10 @@ class AnymalTerrainTask(RLTask):
                 val = mat_cfg.get(param_name, 0.0)
                 self.pbd_parameters[target_envs, col] = float(val)
 
+            # Finally, handle solid_rest_offset for active systems
+            val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
+            self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
+
 
     def randomize_pbd_material(self):
         """
@@ -908,6 +1027,9 @@ class AnymalTerrainTask(RLTask):
         self.last_actions = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
         )
+        self.last_torques = torch.zeros(
+            self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
+        )
         self.feet_names = ["FL", "FR", "RL", "RR"]
         self.num_feet = len(self.feet_names)
         self.feet_indices = torch.arange(self.num_feet, dtype=torch.long, device=self.device, requires_grad=False)
@@ -942,7 +1064,7 @@ class AnymalTerrainTask(RLTask):
         self.ground_heights_below_foot = torch.zeros((self.num_envs * 4), dtype=torch.float, device=self.device)
         self.base_contact_forces = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
         self.thigh_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
-        # self.calf_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        self.calf_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
         self.foot_contact_forces = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device, requires_grad=False)
 
 
@@ -955,7 +1077,7 @@ class AnymalTerrainTask(RLTask):
         self.payloads = torch.zeros(self.num_envs,  dtype=torch.float, device=self.device, requires_grad=False)
         self.com_displacements = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device,
                                              requires_grad=False)
-        self.motor_strengths = torch.ones(self.num_envs, self.num_dof, dtype=torch.float, device=self.device,
+        self.motor_strengths = torch.ones(2, self.num_envs, self.num_dof, dtype=torch.float, device=self.device,
                                           requires_grad=False)
         self.motor_offsets = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device,
                                             requires_grad=False)
@@ -1016,7 +1138,7 @@ class AnymalTerrainTask(RLTask):
             self._set_friction(self._anymals._foot, env_ids=env_ids)
 
         if self.vel_curriculum:
-            self._init_command_distribution()
+            self._init_command_ranges_by_terrain()
         self._prepare_reward_function()
 
         # Define maximum length of tracking history
@@ -1044,11 +1166,9 @@ class AnymalTerrainTask(RLTask):
         if len(env_ids) == 0:
             return
         indices = env_ids.to(dtype=torch.int32)
-        
-        if self.curriculum:
-            self.update_terrain_level(env_ids)
 
         if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
+            self.update_command_curriculum(env_ids)
             self._resample_commands(env_ids)
         else:
             self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
@@ -1057,6 +1177,9 @@ class AnymalTerrainTask(RLTask):
 
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
+        
+        if self.curriculum:
+            self.update_terrain_level(env_ids)
 
         positions_offset = torch_rand_float(1, 1, (len(env_ids), self.num_dof), device=self.device)
         self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
@@ -1118,36 +1241,39 @@ class AnymalTerrainTask(RLTask):
                 torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
             )
 
-        # # Get a per‐environment reward in X, instead of a single scalar
-        # lin_x_rewards = self.episode_sums["tracking_lin_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
-        # ang_x_rewards = self.episode_sums["tracking_ang_vel"][env_ids] / self.max_episode_length_s  # shape == (len(env_ids),)
-        # final_lengths = self.progress_buf[env_ids]  / self.max_episode_length_s     # Update history buffer for each environment
+        steps     = self.progress_buf[env_ids].clamp(min=1)            # number of physics steps
+        durations = steps * self.dt                               # actual seconds elapsed
+        # Get a per‐environment reward in X, instead of a single scalar
+        lin_x_rewards = self.episode_sums["tracking_lin_vel"][env_ids] / durations  # shape == (len(env_ids),)
+        ang_x_rewards = self.episode_sums["tracking_ang_vel"][env_ids] / durations  # shape == (len(env_ids),)
+        final_lengths = self.progress_buf[env_ids]  / self.max_episode_length     # Update history buffer for each environment
 
-        # # 1. current write positions for every env we’re resetting
-        # lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
-        # ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
-        # len_pos = self.ep_length_history_idx[env_ids]      % self.tracking_history_len   # episode length
+        # 1. current write positions for every env we’re resetting
+        lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
+        ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
+        len_pos = self.ep_length_history_idx[env_ids]      % self.tracking_history_len   # episode length
 
-        # # 2. write the new values
-        # self.tracking_lin_vel_x_history[env_ids, lin_pos] = lin_x_rewards                 # (N,)
-        # self.tracking_ang_vel_x_history[env_ids, ang_pos] = ang_x_rewards                 # (N,)
-        # self.ep_length_history      [env_ids, len_pos] = final_lengths                    # (N,)
+        # 2. write the new values
+        self.tracking_lin_vel_x_history[env_ids, lin_pos] = lin_x_rewards                 # (N,)
+        self.tracking_ang_vel_x_history[env_ids, ang_pos] = ang_x_rewards                 # (N,)
+        self.ep_length_history      [env_ids, len_pos] = final_lengths                    # (N,)
 
-        # # 3. advance the circular indices (modulo history length)
-        # self.tracking_lin_vel_x_history_idx[env_ids] = (lin_pos + 1) % self.tracking_history_len
-        # self.tracking_ang_vel_x_history_idx[env_ids] = (ang_pos + 1) % self.tracking_history_len
-        # self.ep_length_history_idx      [env_ids] = (len_pos + 1) % self.tracking_history_len
+        # 3. advance the circular indices (modulo history length)
+        self.tracking_lin_vel_x_history_idx[env_ids] = (lin_pos + 1) % self.tracking_history_len
+        self.tracking_ang_vel_x_history_idx[env_ids] = (ang_pos + 1) % self.tracking_history_len
+        self.ep_length_history_idx      [env_ids] = (len_pos + 1) % self.tracking_history_len
 
-        # # 4. mark a buffer as ‘full’ the first time it wraps around
-        # self.tracking_lin_vel_x_history_full[env_ids] |= (self.tracking_lin_vel_x_history_idx[env_ids] == 0)
-        # self.tracking_ang_vel_x_history_full[env_ids] |= (self.tracking_ang_vel_x_history_idx[env_ids] == 0)
-        # self.ep_length_history_full      [env_ids] |= (self.ep_length_history_idx      [env_ids] == 0)
+        # 4. mark a buffer as ‘full’ the first time it wraps around
+        self.tracking_lin_vel_x_history_full[env_ids] |= (self.tracking_lin_vel_x_history_idx[env_ids] == 0)
+        self.tracking_ang_vel_x_history_full[env_ids] |= (self.tracking_ang_vel_x_history_idx[env_ids] == 0)
+        self.ep_length_history_full      [env_ids] |= (self.ep_length_history_idx      [env_ids] == 0)
 
         for key in self.episode_sums.keys():      
             self.episode_sums[key][env_ids] = 0.0
 
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
+        self.last_torques[env_ids] = 0.0
         self.feet_air_time[env_ids] = 0.0
         self.reset_buf[env_ids] = 1
         self.obs_history_buf[env_ids, :, :] = 0. 
@@ -1162,7 +1288,9 @@ class AnymalTerrainTask(RLTask):
             # after that, always zero it
             self.progress_buf[env_ids] = 0  
 
-        self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
+        if self.curriculum
+            self.extras["episode"]["current_terrain_level"] = torch.mean(self.terrain_levels.float())
+            self.extras["episode"]["unlocked_terrain_levels"] = torch.mean(self.unlocked_terrain_levels.float())
         self.extras["time_outs"] = self.timeout_buf
         self.extras["episode"]["min_command_x_vel"]   = torch.min(self.commands[:, 0])
         self.extras["episode"]["max_command_x_vel"]   = torch.max(self.commands[:, 0])
@@ -1172,20 +1300,18 @@ class AnymalTerrainTask(RLTask):
         self.extras["episode"]["max_command_yaw_vel"] = torch.max(self.commands[:, 2])
         self.extras["episode"]["min_action"] = torch.min(self.actions)
         self.extras["episode"]["max_action"] = torch.max(self.actions)
-
-        if self.vel_curriculum:
-            for curriculum, category in zip(self.curricula, self.category_names):
-                area = curriculum.weights.sum() / float(curriculum.weights.numel())
-                lo, hi = curriculum.low, curriculum.high
-                self.extras["episode"][f"command_area_{category}"] = area
-                self.extras["episode"][f"weights_{category}"] = curriculum.weights
-                self.extras["episode"][f"grid_{category}"]    = curriculum.grid
-                self.extras["episode"][f"curr_{category}_range_x_min"]   = lo[0]
-                self.extras["episode"][f"curr_{category}_range_x_max"]   = hi[0]
-                self.extras["episode"][f"curr_{category}_range_y_min"]   = lo[1]
-                self.extras["episode"][f"curr_{category}_range_y_max"]   = hi[1]
-                self.extras["episode"][f"curr_{category}_range_yaw_min"] = lo[2]
-                self.extras["episode"][f"curr_{category}_range_yaw_max"] = hi[2]
+    
+        if self.vel_curriculum:                         
+            for terr_id, row in self._id2row.items():   # ORIGINAL terrain IDs
+                vx_min, vx_max, vy_min, vy_max, wz_min, wz_max = \
+                    self.command_ranges_by_terrain[row]
+                prefix = f"tid{terr_id}_"               # e.g. "tid3_"
+                self.extras["episode"][prefix + "vx_min"] = vx_min.item()
+                self.extras["episode"][prefix + "vx_max"] = vx_max.item()
+                self.extras["episode"][prefix + "vy_min"] = vy_min.item()
+                self.extras["episode"][prefix + "vy_max"] = vy_max.item()
+                self.extras["episode"][prefix + "wz_min"] = wz_min.item()
+                self.extras["episode"][prefix + "wz_max"] = wz_max.item()
 
 
     def refresh_dof_state_tensors(self):
@@ -1201,7 +1327,7 @@ class AnymalTerrainTask(RLTask):
         # self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
         self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
-        # self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
 
     def pre_physics_step(self, actions):
@@ -1213,11 +1339,10 @@ class AnymalTerrainTask(RLTask):
         for i in range(self.decimation):
             if self.world.is_playing():
                 self.joint_pos_target = self.action_scale * self.actions + self.default_dof_pos
-                torques = self.Kp * self.Kp_factors * (
-                    self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.dof_vel
-                torques = torques * self.motor_strengths
+                torques = self.Kp * self.Kp_factors * self.motor_strengths[0] * (
+                    self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.motor_strengths[1] * self.dof_vel
 
-                joint_vel = self.dof_vel 
+                joint_vel = self.dof_vel.clone()
                 max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
                 max_eff   = torch.clip(max_eff, 0.0, self.torque_limits)
                 min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
@@ -1266,6 +1391,7 @@ class AnymalTerrainTask(RLTask):
 
             self.last_actions[:] = self.actions[:]
             self.last_dof_vel[:] = self.dof_vel[:]
+            self.last_torques[:] = self.torques[:]
             
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
@@ -1277,30 +1403,23 @@ class AnymalTerrainTask(RLTask):
 
     def check_termination(self):
         self.reset_buf = torch.norm(self.base_contact_forces, dim=1) > 1.0
-        self.timeout_buf = self.progress_buf > self.max_episode_length # no terminal reward for time-outs
-        self.reset_buf |= self.timeout_buf
-        
-        if self.teleport_active and not self.curriculum:
+        if self.oob_active and self.curriculum:
             # Convert each robot's base (x,y) position into heightfield indices
             hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
             hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
             # Check if the robot is outside the "safe" bounds with the buffer:
-            out_of_bounds = (
-                (hf_x < self.bx_start + self.teleport_buffer) |
-                (hf_x > self.bx_end - self.teleport_buffer)  |
-                (hf_y < self.by_start + self.teleport_buffer) |
-                (hf_y > self.by_end - self.teleport_buffer)
+            oob = (
+                (hf_x < self.bx_start + self.oob_buffer) |
+                (hf_x > self.bx_end - self.oob_buffer)  |
+                (hf_y < self.by_start + self.oob_buffer) |
+                (hf_y > self.by_end - self.oob_buffer)
             )
-            teleport_env_ids = out_of_bounds.nonzero(as_tuple=False).flatten()
-            if teleport_env_ids.numel() > 0:
-                self.base_pos[teleport_env_ids] = self.base_init_state[0:3]
-                self.base_pos[teleport_env_ids, 0:3] += self.env_origins[teleport_env_ids]
-                self.base_pos[teleport_env_ids, 0:2] += torch_rand_float(-1., 1., (len(teleport_env_ids), 2), device=self.device)
-                indices = teleport_env_ids.to(dtype=torch.int32)
-                self._anymals.set_world_poses(
-                positions=self.base_pos[teleport_env_ids].clone(), orientations=self.base_quat[teleport_env_ids].clone(), indices=indices
-            )
+            self.progress_buf[oob] = self.max_episode_length + 1
             
+        self.timeout_buf = self.progress_buf > self.max_episode_length # no terminal reward for time-outs
+        self.reset_buf |= self.timeout_buf
+        
+
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, which will be called to compute the total reward.
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
@@ -1386,7 +1505,8 @@ class AnymalTerrainTask(RLTask):
         Build a 'proprio_obs' block and (optionally) a 'heights' block,
         then combine them in obs_buf. Only 'proprio_obs' is put into obs_history.
         """
-        contact_state = (torch.norm(self.foot_contact_forces[:, self.feet_indices, :], dim=2) > 1.0).float()     
+        foot_force = torch.norm(self.foot_contact_forces[:, self.feet_indices, :], dim=2)  # (N,4)
+        contact_state = (foot_force > 1.0).float()     
         proprio_obs = torch.cat((
             self.base_lin_vel * self.lin_vel_scale,
             self.base_ang_vel * self.ang_vel_scale,
@@ -1395,7 +1515,7 @@ class AnymalTerrainTask(RLTask):
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
             self.actions,
-            # contact_state
+            contact_state
         ), dim=-1)  
 
         # 2) Add noise (only on proprio)
@@ -1419,19 +1539,21 @@ class AnymalTerrainTask(RLTask):
         # 4) Build privileged observations
         priv_parts = []
         if self.priv_base:
+            motor_strength_flat = self.motor_strengths.permute(1, 0, 2).reshape(self.num_envs, -1)  # (B, 2·12)
             priv_parts += [
                 (self.static_friction_coeffs - self.friction_shift) * self.friction_scale,
                 (self.dynamic_friction_coeffs - self.friction_shift) * self.friction_scale,
                 (self.restitutions - self.restitution_shift) * self.restitution_scale,
                 (self.payloads.unsqueeze(1) - self.payload_shift) * self.payload_scale,
                 (self.com_displacements - self.com_shift) * self.com_scale,
-                (self.motor_strengths - self.motor_strength_shift) * self.motor_strength_scale,
+                (motor_strength_flat - self.motor_strength_shift) * self.motor_strength_scale,
+                # (self.motor_offsets - self.motor_offset_shift) * self.motor_offset_scale,
             ]
             # contact normals (unit vectors)  ---------
             eps = 1e-8
-            normals = self.foot_contact_forces[:, self.feet_indices, :]  # (N,4,3)
-            normals_mag = torch.linalg.norm(normals, dim=2, keepdim=True).clamp_min(eps)
-            contact_normals = normals / normals_mag                      # (N,4,3)
+            normals_mag = foot_force.unsqueeze(-1).clamp_min(eps)
+            raw_normals = self.foot_contact_forces[:, self.feet_indices, :] / normals_mag                      # (N,4,3)
+            contact_normals = raw_normals * contact_state.unsqueeze(-1)  
             priv_parts.append(contact_normals.view(self.num_envs, -1))   # flatten to (N,12)
 
         # compliance (soft contacts)
@@ -1543,8 +1665,8 @@ class AnymalTerrainTask(RLTask):
             torch.norm(self.thigh_contact_forces, dim=-1)
             > 0.1
         )
-        # calf_contact = (torch.norm(self.calf_contact_forces, dim=-1) > 0.1)
-        # total_contact = thigh_contact + calf_contact
+        calf_contact = (torch.norm(self.calf_contact_forces, dim=-1) > 0.1)
+        total_contact = thigh_contact + calf_contact
         return torch.sum(thigh_contact, dim=-1)
 
     def _reward_termination(self):
@@ -1565,6 +1687,9 @@ class AnymalTerrainTask(RLTask):
     def _reward_torque_limits(self):
         # penalize torques too close to the limit
         return torch.sum((torch.abs(self.torques) - self.torque_limits*self.soft_torque_limit).clip(min=0.), dim=1)
+    
+    def _reward_delta_torques(self):
+        return torch.sum(torch.square(self.torques - self.last_torques), dim=1)
 
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
@@ -1605,6 +1730,8 @@ class AnymalTerrainTask(RLTask):
         # Penalize hip motion
         return torch.sum(torch.abs(self.dof_pos[:, :4] - self.default_dof_pos[:, :4]), dim=1)
     
+
+    
     #------------ end reward functions----------------
     
 
@@ -1620,44 +1747,20 @@ class AnymalTerrainTask(RLTask):
             system_name = f"system{system_id}"     # "system1", "system2", etc.            
             material_key = f"pbd_material_{system_name}"
             particle_system_path = f"/World/particleSystem/{system_name}"
-            contact_offset = self._particle_cfg[system_name].get("particle_system_contact_offset", None)
 
             # **Create Particle System if not already created**
             if system_name not in self.created_particle_systems:
                 if not self._stage.GetPrimAtPath(particle_system_path).IsValid():
-                    fluid = self._particle_cfg[system_name].get("particle_grid_fluid", False)
-                    particle_contact_offset = self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None)
-                    fluid_rest_offset = self._particle_cfg[system_name].get("particle_system_fluid_rest_offset", None)
-                    solid_rest_offset = self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None)
-                    rest_offset = self._particle_cfg[system_name].get("particle_system_rest_offset", None)
-
-                    # Raise an error if it is a fluid system and no particle contact offset is provided.
-                    if fluid and particle_contact_offset is None:
-                        raise ValueError("For fluid systems, 'particle_system_particle_contact_offset' must be provided.")
-
-                    if fluid:
-                        if fluid_rest_offset is None :
-                            fluid_rest_offset = 0.99 * 0.6 * particle_contact_offset
-
-                        # For example, for rest offset and solid rest offset, if they are not provided:
-                        if rest_offset is None :
-                            rest_offset = 0.99 * particle_contact_offset
-
-                        if solid_rest_offset is None :
-                            solid_rest_offset = 0.99 * particle_contact_offset
-
-                        if contact_offset is None :
-                            contact_offset = 1 * particle_contact_offset
-
+                    
                     particle_system = ParticleSystem(
                         prim_path=particle_system_path,
                         particle_system_enabled=True,
                         simulation_owner="/physicsScene",
-                        rest_offset=rest_offset,
-                        contact_offset=contact_offset,
-                        solid_rest_offset=solid_rest_offset,
-                        fluid_rest_offset = fluid_rest_offset, 
-                        particle_contact_offset=particle_contact_offset,
+                        rest_offset=self._particle_cfg[system_name].get("rest_offset", None),
+                        contact_offset=self._particle_cfg[system_name].get("contact_offset", None),
+                        solid_rest_offset=self._particle_cfg[system_name].get("solid_rest_offset", None),
+                        fluid_rest_offset = self._particle_cfg[system_name].get("fluid_rest_offset", None),
+                        particle_contact_offset=self._particle_cfg[system_name].get("particle_contact_offset", None),
                         max_velocity=self._particle_cfg[system_name].get("particle_system_max_velocity", None),
                         max_neighborhood=self._particle_cfg[system_name].get("particle_system_max_neighborhood", None),
                         solver_position_iteration_count=self._particle_cfg[system_name].get("particle_system_solver_position_iteration_count", None),

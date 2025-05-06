@@ -5,23 +5,23 @@ physics_engine: ${..physics_engine}
 env:
   numEnvs: ${resolve_default:2048,${...num_envs}}
   clipObservations: 100
-  # clipActions: 2
+  clipActions: 2
 
   commands:
     VelocityCurriculum: False
-    curriculum_seed:  100
     limit_vel_x:     [-10.0, 10.0]
     limit_vel_y:     [-0.6, 0.6]
     limit_vel_yaw:   [-1, 1]
-    num_bins_vel_x:    30
-    num_bins_vel_y:    3
-    num_bins_vel_yaw:  3
-    lin_vel_x:     [-0.6, 0.6]
-    lin_vel_y:     [-0.6, 0.6]
-    ang_vel_yaw:   [-0.6, 0.6]
+    lin_vel_x:     [-0.5, 0.5]
+    lin_vel_y:     [-0.5, 0.5]
+    ang_vel_yaw:   [-0.5, 0.5]
     curriculum_thresholds:
-      tracking_lin_vel: 0.8
-      tracking_ang_vel: 0.8
+      delta_lin_vel_x: 0.4
+      tracking_length: 2
+      tracking_lin_vel_high: 0.8
+      tracking_lin_vel_low: 0.6
+      tracking_ang_vel_high: 0.8
+      tracking_ang_vel_low: 0.6
       tracking_eps_length: 0.9
 
   terrain:
@@ -36,12 +36,13 @@ env:
 
     curriculum: False
     curriculum_thresholds:
+      tracking_length: 10
       tracking_lin_vel: 0.8
       tracking_ang_vel: 0.8
       tracking_eps_length: 0.9
 
-    teleportActive: False
-    teleportBuffer: 0.5
+    oobActive: False
+    oobBuffer: 0.5
     
     mapLength: 8.
     mapWidth: 8.
@@ -53,7 +54,8 @@ env:
       - name: flat
         particle_present: False
         compliant: False
-        count: 10
+        row_count: 10
+        col_count: 10
         level: 0
       # - name: flat
       #   particle_present: False
@@ -307,7 +309,7 @@ env:
     contactForceNoise: 0.05
 
     #randomization
-    pushEnabled: True
+    pushEnabled: False
     pushInterval_s: 15
 
     # episode length in seconds

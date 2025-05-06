@@ -56,11 +56,11 @@ def get_experience(headless, enable_livestream, enable_viewport, enable_recordin
             import leggeedisaacgymenvs
             experience = os.path.abspath(os.path.join(os.path.dirname(leggeedisaacgymenvs.__file__), '../apps/omni.isaac.sim.python.gym.camera.kit'))
         else:
-            experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.kit'
+            experience = f'{os.environ["EXP_PATH"]}/isaacsim.exp.base.python.kit'
             if enable_livestream:
-                experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.gym.livestream.kit'
+                experience = f'{os.environ["EXP_PATH"]}/isaacsim.exp.full.streaming.kit'
             elif headless and not enable_recording:
-                experience = f'{os.environ["EXP_PATH"]}/omni.isaac.sim.python.gym.headless.kit'
+                experience = f'{os.environ["EXP_PATH"]}/isaacsim.exp.base.zero_delay.kit'
 
     else:
         experience = kit_app
