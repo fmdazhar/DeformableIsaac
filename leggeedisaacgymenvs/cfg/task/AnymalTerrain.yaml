@@ -37,8 +37,8 @@ env:
     curriculum: False
     curriculum_thresholds:
       tracking_length: 10
-      tracking_lin_vel: 0.8
-      tracking_ang_vel: 0.8
+      tracking_lin_vel_high: 0.8
+      tracking_ang_vel_high: 0.8
       tracking_eps_length: 0.9
 
     oobActive: False

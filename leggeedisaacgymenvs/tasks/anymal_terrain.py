@@ -504,6 +504,10 @@ class AnymalTerrainTask(RLTask):
             self.tracking_lin_vel_x_history_idx  [these_envs] = 0
             self.tracking_lin_vel_x_history_full [these_envs] = False
 
+            self.tracking_ang_vel_x_history      [these_envs] = 0.0
+            self.tracking_ang_vel_x_history_idx  [these_envs] = 0
+            self.tracking_ang_vel_x_history_full [these_envs] = False
+
             self.ep_length_history        [these_envs] = 0.0
             self.ep_length_history_idx    [these_envs] = 0
             self.ep_length_history_full   [these_envs] = False
@@ -537,13 +541,17 @@ class AnymalTerrainTask(RLTask):
     def update_terrain_level(self, env_ids):
         
         if self.init_done:
-            threshold = 0.8
+            tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]
+            tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"]
+            tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length"]
             full_mask   = self.tracking_lin_vel_x_history_full[env_ids]        # Bool[|env_ids|]
             valid_envs  = env_ids[full_mask]                                    # maybe empty
 
             if valid_envs.numel():                                             # guard for speed
-                mean_rewards = self.tracking_lin_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
-                promote_mask = mean_rewards > threshold
+                tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
+                tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
+                tracking_episode_length_mean = self.ep_length_history[valid_envs].mean(dim=1)  # Float[valid_envs]
+                promote_mask = (tracking_lin_vel_x_mean > tracking_lin_vel_high) and (tracking_ang_vel_x_mean > tracking_ang_vel_high) and (tracking_episode_length_mean > tracking_episode_length) # Bool[valid_envs]
                 promote_envs = valid_envs[promote_mask]                         # again maybe empty
 
                 if promote_envs.numel():
@@ -556,6 +564,10 @@ class AnymalTerrainTask(RLTask):
                     self.tracking_lin_vel_x_history      [promote_envs] = 0.0
                     self.tracking_lin_vel_x_history_idx  [promote_envs] = 0
                     self.tracking_lin_vel_x_history_full [promote_envs] = False
+
+                    self.tracking_ang_vel_x_history      [promote_envs] = 0.0
+                    self.tracking_ang_vel_x_history_idx  [promote_envs] = 0
+                    self.tracking_ang_vel_x_history_full [promote_envs] = False
 
                     self.ep_length_history        [promote_envs] = 0.0
                     self.ep_length_history_idx    [promote_envs] = 0
@@ -1142,7 +1154,7 @@ class AnymalTerrainTask(RLTask):
         self._prepare_reward_function()
 
         # Define maximum length of tracking history
-        self.tracking_history_len = 10
+        self.tracking_history_len = self.terrain_curriculum_cfg["tracking_length"]
         # Initialize linear velocity tracking buffer and index for each env
         self.tracking_lin_vel_x_history = torch.zeros((self.num_envs, self.tracking_history_len), device=self.device)
         self.tracking_lin_vel_x_history_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
