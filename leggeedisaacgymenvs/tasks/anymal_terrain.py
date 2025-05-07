@@ -502,17 +502,8 @@ class AnymalTerrainTask(RLTask):
             self.command_ranges_by_terrain[row, 0] = new_min
             self.command_ranges_by_terrain[row, 1] = new_max
 
-            self.tracking_lin_vel_x_history      [these_envs] = 0.0
-            self.tracking_lin_vel_x_history_idx  [these_envs] = 0
-            self.tracking_lin_vel_x_history_full [these_envs] = False
+            self._clear_tracking_history(these_envs)
 
-            self.tracking_ang_vel_x_history      [these_envs] = 0.0
-            self.tracking_ang_vel_x_history_idx  [these_envs] = 0
-            self.tracking_ang_vel_x_history_full [these_envs] = False
-
-            self.ep_length_history        [these_envs] = 0.0
-            self.ep_length_history_idx    [these_envs] = 0
-            self.ep_length_history_full   [these_envs] = False
 
     def _resample_commands(self, env_ids: torch.Tensor) -> None:
         """
@@ -539,6 +530,19 @@ class AnymalTerrainTask(RLTask):
 
             self.commands[these_envs, 0] = torch.rand(
                 len(these_envs), device=self.device, dtype=torch.float) * (max_x - min_x) + min_x
+            
+    def _clear_tracking_history(self, envs: torch.Tensor) -> None:
+        self.tracking_lin_vel_x_history[envs]  = 0.0
+        self.tracking_lin_vel_x_history_idx[envs]  = 0
+        self.tracking_lin_vel_x_history_full[envs] = False
+
+        self.tracking_ang_vel_x_history[envs]  = 0.0
+        self.tracking_ang_vel_x_history_idx[envs]  = 0
+        self.tracking_ang_vel_x_history_full[envs] = False
+
+        self.ep_length_history[envs]  = 0.0
+        self.ep_length_history_idx[envs]  = 0
+        self.ep_length_history_full[envs] = False
 
     def update_terrain_level(self, env_ids):
         
@@ -546,41 +550,36 @@ class AnymalTerrainTask(RLTask):
             tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]
             tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"]
             tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length"]
-            full_mask   = self.tracking_lin_vel_x_history_full[env_ids]        # Bool[|env_ids|]
-            valid_envs  = env_ids[full_mask]                                    # maybe empty
+            full_hist  = self.tracking_lin_vel_x_history_full       # Bool[|env_ids|]
+            at_cap    = self.terrain_levels == self.unlocked_levels       # Bool[|env_ids|]
+            not_solved = self.unlocked_levels < self.max_terrain_level + 1
+            mask      = at_cap[env_ids] & not_solved[env_ids] & full_hist[env_ids]
+            valid_envs  = env_ids[mask]                                    # maybe empty
 
             if valid_envs.numel():                                             # guard for speed
                 tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
                 tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
                 tracking_episode_length_mean = self.ep_length_history[valid_envs].mean(dim=1)  # Float[valid_envs]
-                promote_mask = (tracking_lin_vel_x_mean > tracking_lin_vel_high) and (tracking_ang_vel_x_mean > tracking_ang_vel_high) and (tracking_episode_length_mean > tracking_episode_length) # Bool[valid_envs]
+                promote_mask = (tracking_lin_vel_x_mean > tracking_lin_vel_high) & \
+                   (tracking_ang_vel_x_mean > tracking_ang_vel_high) & \
+                   (tracking_episode_length_mean > tracking_episode_length)
                 promote_envs = valid_envs[promote_mask]                         # again maybe empty
 
                 if promote_envs.numel():
-                    # (a) bump terrain level, but clip to [0, max_terrain_level-1]
                     self.unlocked_levels[promote_envs] = torch.clamp(
                     self.unlocked_levels[promote_envs] + 1,
-                    max=self.max_terrain_level - 1
+                    max=self.max_terrain_level + 1
                     )
 
-                    self.tracking_lin_vel_x_history      [promote_envs] = 0.0
-                    self.tracking_lin_vel_x_history_idx  [promote_envs] = 0
-                    self.tracking_lin_vel_x_history_full [promote_envs] = False
-
-                    self.tracking_ang_vel_x_history      [promote_envs] = 0.0
-                    self.tracking_ang_vel_x_history_idx  [promote_envs] = 0
-                    self.tracking_ang_vel_x_history_full [promote_envs] = False
-
-                    self.ep_length_history        [promote_envs] = 0.0
-                    self.ep_length_history_idx    [promote_envs] = 0
-                    self.ep_length_history_full   [promote_envs] = False
-
-        # ── 2. Sample a level 0 … unlocked (inclusive) ───────────────
-        span     = self.unlocked_levels[env_ids] - self.min_terrain_level + 1              # ≥ 1 always
+        span     = self.unlocked_levels[env_ids] - self.min_terrain_level             
         rnd      = torch.floor(torch.rand_like(span.float()) * span.float()).long()
-        self.terrain_levels[env_ids] = rnd + self.min_terrain_level
+        new_levels = rnd + self.min_terrain_level
+        old_levels = self.terrain_levels[env_ids]
+        self.terrain_levels[env_ids] = new_levels
+        changed_envs = env_ids[ (old_levels != new_levels)] 
+        if changed_envs.numel():
+            self._clear_tracking_history(changed_envs)
 
-        new_levels = self.terrain_levels[env_ids]
         unique_levels, inverse_idx = torch.unique(new_levels, return_inverse=True)
         for i, lvl in enumerate(unique_levels):
             # Get which envs in env_ids map to this terrain level
