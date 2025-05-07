@@ -1481,12 +1481,11 @@ class AnymalTerrainTask(RLTask):
                 self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
             )
 
-        
-        # # inactive rewards, prefixed
-        # for name in self.inactive_reward_names:
-        #     self.episode_sums[f"inactive_{name}"] = torch.zeros(
-        #         self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
-        #     )
+        # inactive rewards, prefixed
+        for name in self.inactive_reward_names:
+            self.episode_sums[f"inactive_{name}"] = torch.zeros(
+                self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
+            )
 
     def compute_reward(self):
         """ Compute rewards
@@ -1494,11 +1493,11 @@ class AnymalTerrainTask(RLTask):
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
-        # # 1) log inactive rewards under “inactive_<name>”
-        # for name in self.inactive_reward_names:
-        #     raw = getattr(self, f"_reward_{name}")()
-        #     # e.g. store in extras or episode_sums:
-        #     self.episode_sums[f"inactive_{name}"] += raw * self.dt
+        # 1) log inactive rewards under “inactive_<name>”
+        for name in self.inactive_reward_names:
+            raw = getattr(self, f"_reward_{name}")()
+            # e.g. store in extras or episode_sums:
+            self.episode_sums[f"inactive_{name}"] += raw * self.dt
 
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
