@@ -12,17 +12,17 @@ policy:
   activation: elu
   # Only leg-specific control head remains.
   leg_control_head_hidden_dims: [256, 128]
-  priv_encoder_dims: [] #[128,128] #64, 20
+  priv_encoder_dims: [64, 32, 24] #[128,128] #64, 20
   num_leg_actions: 12
 
 algorithm:
   value_loss_coef: 1.0
   use_clipped_value_loss: True
   clip_param: 0.2
-  entropy_coef: 0.01 #0.01
-  num_learning_epochs: 5
-  num_mini_batches: 4
-  learning_rate:  1.0e-3 #1.0e-3 #3.e-4  #5.e-4
+  entropy_coef: 0.006 #0.01
+  num_learning_epochs: 7
+  num_mini_batches: 2
+  learning_rate: 1.0e-3 #7.e-4 #1.0e-3 #1.0e-3 #3.e-4  #5.e-4
   schedule: 'adaptive' #fixed #'adaptive'
   gamma: 0.99
   lam: 0.95
@@ -31,14 +31,14 @@ algorithm:
   max_grad_norm: 1.0
   # Update min_policy_std to match the action space (12 values)
   min_policy_std: [0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25]
-  use_history_encoding: False
+  use_history_encoding: True
   dagger_update_freq: 20
-  priv_reg_coef_schedual: [0, 0, 3000, 7000]
+  priv_reg_coef_schedual: [0, 0.1, 0, 1000]
 
 runner:
   policy_class_name: ActorCritic
   algorithm_class_name: PPO
-  num_steps_per_env: 48 #24
-  max_iterations: 1500
+  num_steps_per_env: 62 #24
+  max_iterations: 3000
   save_interval: 500
 

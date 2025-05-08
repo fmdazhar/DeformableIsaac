@@ -3,26 +3,27 @@ name: AnymalTerrain
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:2048,${...num_envs}}
+  numEnvs: ${resolve_default:1024,${...num_envs}}
   clipObservations: 100
-  # clipActions: 2
+  # clipActions: 5
 
   commands:
     VelocityCurriculum: True
     limit_vel_x:     [-10.0, 10.0]
-    limit_vel_y:     [-0.6, 0.6]
-    limit_vel_yaw:   [-1, 1]
+    limit_vel_y:     [-1, 1]
+    limit_vel_yaw:   [-3.14, 3.14]
     lin_vel_x:     [-0.6, 0.6]
-    lin_vel_y:     [-0.6, 0.6]
-    ang_vel_yaw:   [-0.6, 0.6]
+    lin_vel_y:     [-1, 1]
+    ang_vel_yaw:   [-3.14, 3.14]
     curriculum_thresholds:
-      delta_lin_vel_x: 0.4
-      tracking_length: 2
+      delta_lin_vel_x: 0.3
+      tracking_length: 5
       tracking_lin_vel_high: 0.8
       tracking_lin_vel_low: 0.7
-      tracking_ang_vel_high: 0.8
+      tracking_ang_vel_high: 0.75
       tracking_ang_vel_low: 0.7
-      tracking_eps_length: 0.9
+      tracking_eps_length_high: 0.95
+      tracking_eps_length_low: 0.9
 
   terrain:
     measureHeights: True
@@ -34,12 +35,12 @@ env:
     numLevels: 10 # for no curriculum
     numTerrains: 20 # for no curriculum
 
-    curriculum: False
+    curriculum: True
     curriculum_thresholds:
-      tracking_length: 10
+      tracking_length: 35
       tracking_lin_vel_high: 0.7
       tracking_ang_vel_high: 0.7
-      tracking_eps_length: 0.9
+      tracking_eps_length_high: 0.9
 
     oobActive: False
     oobBuffer: 0.5
@@ -57,47 +58,20 @@ env:
         row_count: 10
         col_count: 10
         level: 0
-      # - name: flat
-      #   particle_present: False
-      #   compliant: False
-      #   count: 10
-      #   level: 0
-      # - name: flat
-      #   particle_present: False
-      #   compliant: False
-      #   count: 10
-      #   level: 0
-      # - name: flat
-      #   particle_present: False
-      #   compliant: False
-      #   count: 10
-      #   level: 0
-      # - name: flat
-      #   particle_present: False
-      #   compliant: False
-      #   count: 10
-      #   level: 0
-      # - name: flat
-      #   particle_present: False
-      #   compliant: False
-      #   count: 10
-      #   level: 0
-      # - name: flat
-      #   particle_present: False
-      #   compliant: False
-      #   count: 10
-      #   level: 0
+
         
       # - name: flat
-      #   compliant: True
       #   particle_present: False
-      #   count: 10
+      #   compliant: True
+      #   row_count: 10
+      #   col_count: 10
       #   level: 1
 
       # - name: central_depression_terrain
-      #   compliant: True
-      #   count: 2
-      #   level: 2
+      #   compliant: False
+      #   row_count: 1
+      #   col_count: 1
+      #   level: 1
       #   particle_present: True
       #   system: 1
       #   depth: 0.13
@@ -122,7 +96,7 @@ env:
 
 
     compliant:
-      stiffnes: 1000000.0 # [N/m]
+      stiffnes: 1000.0 # [N/m]
       damping_multiplier: 0.2 # [N*s/m]
 
     particles:
@@ -228,7 +202,7 @@ env:
     
   control:
     # PD Drive parameters:
-    stiffness: 20.0 # [N*m/rad]
+    stiffness: 25.0 # [N*m/rad]
     damping: 0.5 # [N*m*s/rad]
     # action scale: target angle = actionScale * action + defaultAngle
     actionScale: 0.25
@@ -279,7 +253,14 @@ env:
       collision: -1. #-1.
       action_rate: -0.01
       dof_pos_limits: -10.0
-      # termination: -20.0
+      # delta_torques: -1.0e-7
+      # hip_motion: -0.5
+      # orientation: -1.0
+      feet_contact_forces: -0.01 #-0.01
+      termination: -1.0
+
+
+      
 
     onlyPositiveRewards: True
     baseHeightTarget: 0.25
@@ -295,7 +276,7 @@ env:
     dofPositionScale: 1.0
     dofVelocityScale: 0.05
     heightMeasurementScale: 5.0
-    contactForceScale: 0.01
+    contactForceScale: 0.005
 
     # noise
     addNoise: True
@@ -306,7 +287,6 @@ env:
     angularVelocityNoise: 0.2
     gravityNoise: 0.05
     heightMeasurementNoise: 0.1
-    contactForceNoise: 0.05
 
     #randomization
     pushEnabled: True
@@ -338,8 +318,8 @@ env:
     randomizeKpFactor: False
     randomizeKdFactor: False
 
-    priv_base: False
-    priv_compliance: False
+    priv_base: True
+    priv_compliance: True
     priv_pbd_particle: False
     priv_pbd_particle_base: False
     priv_pbd_non_fluid: False
@@ -351,8 +331,8 @@ env:
       compliance:
         enabled: True
         interval: 50
-        stiffness: [10000, 1000000]
-        damping_multiplier: [0.05, 0.2]
+        stiffness: [500, 20000]
+        damping_multiplier: [0.08, 0.8]
 
       particles:
         enabled: False

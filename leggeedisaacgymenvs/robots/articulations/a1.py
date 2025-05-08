@@ -42,7 +42,7 @@ class A1(Robot):
         if self._usd_path is None:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             # self._usd_path = os.path.join(script_dir, "../asset/Unitree/a1.usd")
-            self._usd_path = os.path.join(script_dir, "../asset/Collected_A1/a1.usd")
+            self._usd_path = os.path.join(script_dir, "../asset/A1/a1.usd")
 
 
         # Add the A1 reference to the stage at the specified prim path

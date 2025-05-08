@@ -18,7 +18,7 @@ max_iterations: ''
 ## Device config
 physics_engine: 'physx'
 # whether to use cpu or gpu pipeline
-pipeline:  'gpu' #'gpu' 'cpu'
+pipeline:  'cpu' #'gpu' 'cpu'
 # whether to use cpu or gpu physx
 sim_device:  'gpu' #'cpu'
 # used for gpu simulation only - device id for running sim and task if pipeline=gpu
@@ -54,7 +54,7 @@ recording_fps: 30
 # directory to save recordings in
 recording_dir: ''
 
-wandb_activate: True
+wandb_activate: false
 wandb_group: ''
 wandb_name: ${train.params.config.name}
 wandb_entity: 'bluewolf'

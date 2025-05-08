@@ -50,10 +50,11 @@ class RLGTrainer:
                 dir=log_dir  # Setting the directory for wandb logs.
             )
 
+
         runner = OnPolicyRunner(env, self.rlg_config_dict, log_dir, device=device,
                                 wandb_activate=self.cfg.wandb_activate)
 
-        if self.cfg.checkpoint and self.cfg.train.runner.resume:
+        if self.cfg.checkpoint :
             print(f"Resuming training from checkpoint: {self.cfg.checkpoint}")
             runner.load(self.cfg.checkpoint)
 
@@ -80,6 +81,12 @@ class RLGTrainer:
                 if env.world.is_playing():
                     if first_frame:
                         env.reset()
+                        env.simulation_app.update()
+                        env.world.reset()
+                        env.world.reset()
+                        env.simulation_app.update()
+                        env.world.reset()
+                        env.simulation_app.update()
                         first_frame = False
                     else:
                         if step_counter >= max_steps:
@@ -180,31 +187,34 @@ def parse_hydra_configs(cfg: DictConfig):
     # Optionally override config values in test mode:
     if cfg.test:
         # Overwrite specific config entries for test scenarios:
-        cfg.task.env.numEnvs = 8
+        cfg.task.env.numEnvs = 1
         cfg.task.env.terrain.numLevels = 10
         cfg.task.env.terrain.numTerrains = 10
 
         cfg.task.env.terrain.curriculum = True
         cfg.task.env.commands.VelocityCurriculum = False
-        cfg.task.env.terrain.teleportActive = True
+        cfg.task.env.terrain.oobActive = False
 
         cfg.task.env.terrain.terrain_types = [
-            {
-                "name": "flat",
-                "particle_present": False,
-                "compliant": False,
-                "count": 2,
-                "level": 0
-            },
+            # {
+            #     "name": "flat",
+            #     "particle_present": False,
+            #     "compliant": True,
+            #     "row_count": 2,
+            #     "col_count": 1,
+            #     "level": 0,
+            # },
             {
                 "name": "central_depression_terrain",
                 "compliant": True,
-                "count": 2,
-                "level": 1,
+                "level": 0,
                 "particle_present": True,
                 "system": 1,
                 "depth": 0.13,
-                "size": 4
+                "size": 4,
+                "row_count": 1,
+                "col_count": 1,
+
             }
         ]
         cfg.task.env.learn.addNoise = False
@@ -216,7 +226,7 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.randomizationRanges.randomizeMotorOffset = False
         cfg.task.env.randomizationRanges.randomizeKpFactor = False
         cfg.task.env.randomizationRanges.randomizeKdFactor = False
-        cfg.task.env.randomizationRanges.material_randomization.enabled = False  
+        # cfg.task.env.randomizationRanges.material_randomization.enabled = False  
         # Add any other overrides you need.
 
 

@@ -131,7 +131,7 @@ class Terrain:
                     center_y2 = int((self.env_width / 2 + 1) / self.horizontal_scale)
                     env_origin_z = np.max(
                         terrain.height_field_raw[center_x1:center_x2, center_y1:center_y2]
-                    ) * self.vertical_scale
+                    ) * self.vertical_scale 
                     self.env_origins[current_row + r, c] = [env_origin_x, env_origin_y, env_origin_z]
                     terrain_type = self.infer_terrain_type(compliant, particles, fluid)
 
