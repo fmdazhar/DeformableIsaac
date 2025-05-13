@@ -398,9 +398,10 @@ class AnymalTerrainTask(RLTask):
 
 
     def _init_command_distribution(self):
-        unique_types = torch.unique(self.terrain_types).cpu().tolist()
-        self.category_names = [f"terrain_{t}" for t in unique_types]
+        static_types = self.terrain_details[:, 4].long()    # all levels’ “type” fields
+        unique_types = torch.unique(static_types).cpu().tolist()
         self.type2idx      = {t: i for i, t in enumerate(unique_types)}
+        self.category_names = [f"terrain_{t}" for t in unique_types]
         self.curricula = [
             RewardThresholdCurriculum(
                 seed = self._task_cfg["env"]["commands"]["curriculum_seed"],
@@ -431,7 +432,12 @@ class AnymalTerrainTask(RLTask):
         """
         if len(env_ids) == 0:
             return
-        
+            
+        self.env_command_categories = torch.as_tensor(
+            [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
+            dtype=torch.long,
+            device=self.device,
+        )
         window_size = self.command_curriculum_cfg["tracking_length"]
         last = torch.stack(
             [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
