@@ -8,13 +8,14 @@ env:
   # clipActions: 5
 
   commands:
+    curriculum_seed: 0
     VelocityCurriculum: True
     limit_vel_x:     [-10.0, 10.0]
-    limit_vel_y:     [-1, 1]
-    limit_vel_yaw:   [-3.14, 3.14]
-    lin_vel_x:     [-0.6, 0.6]
+    limit_vel_y:     [-0.6, 0.6]
+    limit_vel_yaw:   [-10, 10]
+    lin_vel_x:     [-1, 1]
     lin_vel_y:     [-1, 1]
-    ang_vel_yaw:   [-3.14, 3.14]
+    ang_vel_yaw:   [-1, 1]
     curriculum_thresholds:
       delta_lin_vel_x: 0.3
       tracking_length: 5
@@ -24,6 +25,9 @@ env:
       tracking_ang_vel_low: 0.7
       tracking_eps_length_high: 0.95
       tracking_eps_length_low: 0.9
+      num_bins_vel_x: 30
+      num_bins_vel_y: 3
+      num_bins_vel_yaw: 30
 
   terrain:
     measureHeights: True
@@ -59,13 +63,12 @@ env:
         col_count: 10
         level: 0
 
-        
-      # - name: flat
-      #   particle_present: False
-      #   compliant: True
-      #   row_count: 10
-      #   col_count: 10
-      #   level: 1
+      - name: flat
+        particle_present: False
+        compliant: True
+        row_count: 10
+        col_count: 10
+        level: 1
 
       # - name: central_depression_terrain
       #   compliant: False
@@ -74,8 +77,9 @@ env:
       #   level: 1
       #   particle_present: True
       #   system: 1
-      #   depth: 0.13
-      #   size: 4           
+      #   depth: 0.1
+      #   size: 2           
+      
       # - name: central_depression_terrain
       #   compliant: True
       #   count: 1
@@ -105,15 +109,15 @@ env:
       system1:
         pbd_material_friction: 0.8 # Friction value for particles
         pbd_material_density: 1500 # Density of particle material (kg/m³)
-        pbd_material_damping: 10
+        pbd_material_damping: 2
         pbd_material_particle_friction_scale: 0.2 # Scale factor for particle-particle friction
         pbd_material_adhesion: 0.00001 # Adhesion coefficient for particles
-        pbd_material_particle_adhesion_scale: 10000.0 # Scale factor for particle adhesion strength
+        pbd_material_particle_adhesion_scale: 1000.0 # Scale factor for particle adhesion strength
         pbd_material_adhesion_offset_scale: 1.2 # Offset scale for adhesion calculations
 
         # Particle system parameters
         particle_system_rest_offset: 0.04 # Rest offset for particle collision
-        particle_system_solid_rest_offset: 0.03 # Solid rest offset (for rigid particle collision)
+        particle_system_solid_rest_offset: 0.02 # Solid rest offset (for rigid particle collision)
         particle_system_contact_offset: 0.04 # Contact offset for particles
         particle_system_particle_contact_offset: 0.08 # Contact offset specifically between particles
         particle_system_max_velocity: 100.0 # Maximum allowable particle velocity
@@ -338,22 +342,22 @@ env:
         enabled: False
         interval: 20
         systems:
-          system1:
+          system1: #0.2
             enabled: True
             pbd_material_friction_range: [0.8, 0.8]
-            pbd_material_particle_friction_scale_range: [0.1, 0.5]
-            pbd_material_particle_adhesion_scale_range: [5000, 10000]
-            pbd_material_density_range: [1000, 2000]
-            pbd_material_damping_range: [10, 10]
+            pbd_material_particle_friction_scale_range: [0.15, 0.3]
+            pbd_material_particle_adhesion_scale_range: [500, 3000]
+            pbd_material_density_range: [1000, 2500]
+            pbd_material_damping_range: [2, 2]
 
 
-          system2:
+          system2: #0.15
             enabled: True
             pbd_material_friction_range: [0.8, 0.8]
-            pbd_material_particle_friction_scale_range: [0.1, 0.4]
-            pbd_material_particle_adhesion_scale_range: [4000, 8000]
-            pbd_material_density_range: [900, 1800]
-            pbd_material_damping_range: [10, 10]
+            pbd_material_particle_friction_scale_range: [0.15, 0.3]
+            pbd_material_particle_adhesion_scale_range: [1000, 5000]
+            pbd_material_density_range: [1000, 2500]
+            pbd_material_damping_range: [2, 2]
 
           system3:
             enabled: True

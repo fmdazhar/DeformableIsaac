@@ -382,141 +382,6 @@ class AnymalTerrainTask(RLTask):
         self.height_samples = (
             torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
         )
-
-    def _init_command_ranges_by_terrain(self):
-        """
-        Build a lookup table that holds per-terrain-TYPE command ranges.
-
-        Shape: [num_terrain_types, 6]  
-            (min_x, max_x,  min_y, max_y,  min_yaw, max_yaw)
-
-        The table is stored in  `self.command_ranges_by_terrain`
-        and initialised with the *global* command ranges that come from
-        the YAML (self.command_*_range).
-        """
-        unique_ids = torch.unique(self.terrain_details[:, 4]).long()
-        self._id2row = {int(t.item()): i for i, t in enumerate(unique_ids)}
-        
-        base = torch.tensor(
-            [ self.command_x_range[0], self.command_x_range[1],
-            self.command_y_range[0], self.command_y_range[1],
-            self.command_yaw_range[0], self.command_yaw_range[1] ],
-            dtype=torch.float, device=self.device
-        )
-
-        # replicate →  [T, 6]
-        self.command_ranges_by_terrain = base.unsqueeze(0).repeat(len(unique_ids), 1).clone()
-
-    
-    def update_command_curriculum(self, env_ids: torch.Tensor) -> None:
-        """
-        Expand / contract the allowable **x-linear-velocity** range *separately*
-        for every terrain **type** that is present in `env_ids`.
-
-        Strategy – identical to your previous implementation:
-        • look at the last `window_size` episodes for every env  
-        • if mean tracking-reward & episode-length are high ⇒ widen range  
-        • if they are low                                    ⇒ narrow range
-        """
-        if not env_ids.numel():
-            return
-
-        delta_lin   = self.command_curriculum_cfg["delta_lin_vel_x"]
-        window_size = self.command_curriculum_cfg["tracking_length"]
-        tracking_lin_vel_high   =  self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt
-        tracking_lin_vel_low   = self.command_curriculum_cfg["tracking_lin_vel_low"] * self.reward_scales["tracking_lin_vel"] / self.dt
-        tracking_ang_vel_high   =  self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
-        tracking_ang_vel_low   = self.command_curriculum_cfg["tracking_ang_vel_low"] * self.reward_scales["tracking_ang_vel"] / self.dt
-        len_high      = self.command_curriculum_cfg["tracking_eps_length_high"]
-        len_low       = self.command_curriculum_cfg["tracking_eps_length_low"]
-
-        # ── gather helper indices for “last N” circular-buffer access
-        last = torch.stack(
-            [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
-            for k in range(window_size) ],
-            dim=0
-        )                                                      # [N, num_envs]
-
-        # ── process every terrain TYPE seen in env_ids
-        terr_types    = self.terrain_types[env_ids]            # (len(env_ids),)
-        unique_types  = torch.unique(terr_types)
-
-        for t in unique_types:
-            mask = terr_types == t
-            these_envs = env_ids[mask]                         # 1-D tensor
-            if not these_envs.numel():
-                continue
-
-            # ---- pull the last-window rewards & episode lengths, shape: [W, B]
-            idx = last[:, these_envs]
-            tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[these_envs.unsqueeze(0), idx]
-            tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[these_envs.unsqueeze(0), idx]
-            leng  = self.ep_length_history        [these_envs.unsqueeze(0), idx]
-
-            # ignore if any of the last-window slots are still zero
-            if not ((tracking_lin_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
-                continue
-
-            r_mean_lin = tracking_lin_vel_x_history.mean()
-            r_mean_ang = tracking_ang_vel_x_history.mean()
-            l_mean = leng.float().mean()
-
-            # ---- choose direction
-            if (r_mean_lin >= tracking_lin_vel_high) and (r_mean_ang >= tracking_ang_vel_high) and (l_mean >= len_high):
-                direction = +1           # become harder ⇒ widen range
-            elif (r_mean_lin < tracking_lin_vel_low) or (r_mean_ang < tracking_ang_vel_low) or (l_mean <  len_low):
-                direction = -1           # become easier ⇒ shrink range
-            else:
-                direction = 0
-
-            if direction == 0:
-                continue
-
-            # ---- apply the adjustment **clamped** to absolute limits
-            row = self._id2row[int(t.item())]
-            cur_min = self.command_ranges_by_terrain[row, 0]
-            cur_max = self.command_ranges_by_terrain[row, 1]
-
-            if direction == +1:
-                new_min = torch.clamp(cur_min - delta_lin, min=self.limit_vel_x[0])
-                new_max = torch.clamp(cur_max + delta_lin, max=self.limit_vel_x[1])
-            else:
-                new_min = torch.clamp(cur_min + delta_lin, max=self.command_x_range[0])
-                new_max = torch.clamp(cur_max - delta_lin, min=self.command_x_range[1])
-
-            # ––– only act if something really changed ––––––––––––––––––––––––––––––––
-            changed = (not torch.isclose(new_min, cur_min)) or (not torch.isclose(new_max, cur_max))
-            if changed:
-                self.command_ranges_by_terrain[row, 0] = new_min
-                self.command_ranges_by_terrain[row, 1] = new_max
-                self._clear_tracking_history(these_envs)
-
-
-    def _resample_commands(self, env_ids: torch.Tensor) -> None:
-        """
-        Resample the x-linear-velocity command for every env in `env_ids` that
-        has a terrain level > 0. The new command is sampled from the range
-        defined by the terrain type of the env.
-        """
-        if not env_ids.numel():
-            return
-
-        # ---- get the terrain TYPE for each env in `env_ids`
-        terr_types = self.terrain_types[env_ids]                # (len(env_ids),)
-        unique_types = torch.unique(terr_types)                 # (len(unique_types),)
-
-        # ---- resample the x-linear-velocity command for each TYPE
-        for t in unique_types:
-            mask = terr_types == t
-            these_envs = env_ids[mask]                         # 1-D tensor
-            if not these_envs.numel():
-                continue
-
-            row = self._id2row[int(t.item())]
-            min_x, max_x = self.command_ranges_by_terrain[row, 0:2]
-
-            self.commands[these_envs, 0] = torch.rand(
-                len(these_envs), device=self.device, dtype=torch.float) * (max_x - min_x) + min_x
             
     def _clear_tracking_history(self, envs: torch.Tensor) -> None:
         self.tracking_lin_vel_x_history[envs]  = 0.0
@@ -531,50 +396,149 @@ class AnymalTerrainTask(RLTask):
         self.ep_length_history_idx[envs]  = 0
         self.ep_length_history_full[envs] = False
 
-    def update_terrain_level(self, env_ids):
+
+    def _init_command_distribution(self):
+        unique_types = torch.unique(self.terrain_types).cpu().tolist()
+        self.category_names = [f"terrain_{t}" for t in unique_types]
+        self.type2idx      = {t: i for i, t in enumerate(unique_types)}
+        self.curricula = [
+            RewardThresholdCurriculum(
+                seed = self._task_cfg["env"]["commands"]["curriculum_seed"],
+                x_vel=(self.limit_vel_x[0],   self.limit_vel_x[1],  self.command_curriculum_cfg["num_bins_vel_x"]),
+                y_vel=(self.limit_vel_y[0],   self.limit_vel_y[1],  self.command_curriculum_cfg["num_bins_vel_y"]),
+                yaw_vel=(self.limit_vel_yaw[0], self.limit_vel_yaw[1],self.command_curriculum_cfg["num_bins_vel_yaw"]),
+            )
+            for _ in unique_types
+        ]     
+        self.env_command_categories = torch.as_tensor(
+        [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
+        dtype=torch.long,
+        )        
+        self.env_command_bins = np.zeros(self.num_envs, dtype=np.int64)
+
+        # 4. Initialise every curriculum’s range once
+        low  = np.array([self.command_x_range[0], self.command_y_range[0], self.command_yaw_range[0]])
+        high = np.array([self.command_x_range[1], self.command_y_range[1], self.command_yaw_range[1]])
+        for cur in self.curricula:
+            cur.set_to(low=low, high=high)
+
+
+    def _resample_commands(self, env_ids):
+        """
+        Resample (x vel, y vel, yaw vel) commands for the envs in `env_ids`.
+        Curriculum progress is now estimated from the *last* entry of the
+        tracking-history buffers instead of the aggregated episode‐sums.
+        """
+        if len(env_ids) == 0:
+            return
         
+        window_size = self.command_curriculum_cfg["tracking_length"]
+        last = torch.stack(
+            [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
+            for k in range(window_size) ],
+            dim=0
+        ) 
+
+        # Curriculum success thresholds
+        thr = [
+            self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt,
+            self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt,
+            self.command_curriculum_cfg["tracking_eps_length_high"]
+        ]
+
+        # Split envs by terrain-type curriculum --------------------------
+        cats = self.env_command_categories[env_ids.cpu()]                        
+        for cur_idx in torch.unique(cats):
+            mask = (cats == cur_idx)
+            sub_envs = env_ids[mask]                                            
+            if sub_envs.numel() == 0:
+                continue
+            # ---- pull the last-window rewards & episode lengths, shape: [W, B]
+            idx = last[:, sub_envs]
+            tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[sub_envs.unsqueeze(0), idx]
+            tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[sub_envs.unsqueeze(0), idx]
+            leng  = self.ep_length_history        [sub_envs.unsqueeze(0), idx]
+
+            # ignore if any of the last-window slots are still zero
+            if not ((tracking_lin_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
+                continue
+
+            r_mean_lin = tracking_lin_vel_x_history.mean(dim=0)
+            r_mean_ang = tracking_ang_vel_x_history.mean(dim=0)
+            l_mean = leng.float().mean(dim=0)
+
+            rewards = [r_mean_lin, r_mean_ang, l_mean]
+
+            # Let the curriculum object update its bin statistics
+            cur = self.curricula[int(cur_idx)]
+            old_bins = self.env_command_bins[sub_envs.cpu().numpy()]
+            cur.update(old_bins, rewards, thr,
+                            local_range=np.array([0.55, 0.55, 0.55]))
+
+            # Sample new commands & assign them
+            new_cmds, new_bins = cur.sample(batch_size=sub_envs.numel())
+            changed_mask = new_bins != old_bins
+            if changed_mask.any():                               # at least one env moved
+                changed_envs = sub_envs[torch.from_numpy(changed_mask)
+                                        .to(sub_envs.device)]
+                self._clear_tracking_history(changed_envs)
+
+            self.env_command_bins     [sub_envs.cpu().numpy()] = new_bins
+            cmd_tensor = torch.tensor(
+                new_cmds[:, :3], dtype=self.commands.dtype, device=self.device
+            )
+            self.commands[sub_envs, :3] = cmd_tensor
+
+
+    def update_terrain_level(self, env_ids):
+
         if self.init_done:
             tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
             tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
             tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
-            full_hist  = self.tracking_lin_vel_x_history_full       # Bool[|env_ids|]
-            at_cap    = self.terrain_levels == self.unlocked_levels       # Bool[|env_ids|]
-            not_solved = self.unlocked_levels < self.max_terrain_level + 1
-            mask      = at_cap[env_ids] & not_solved[env_ids] & full_hist[env_ids]
-            valid_envs  = env_ids[mask]                                    # maybe empty
+            
+            full_hist  = self.tracking_lin_vel_x_history_full 
+            current_max = self.unlocked_levels.max()     
+            at_cap    = self.terrain_levels == current_max   
+            
+            envs = torch.arange(self.num_envs, device=self.device)
+            mask      = at_cap  & full_hist 
+            valid_envs  = envs[mask] 
+            
+            tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean()  
+            tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean()  
+            tracking_episode_length_mean = self.ep_length_history[valid_envs].mean()  
 
-            if valid_envs.numel():                                             # guard for speed
-                tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
-                tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean(dim=1)  # Float[valid_envs]
-                tracking_episode_length_mean = self.ep_length_history[valid_envs].mean(dim=1)  # Float[valid_envs]
-                promote_mask = (tracking_lin_vel_x_mean > tracking_lin_vel_high) & \
-                   (tracking_ang_vel_x_mean > tracking_ang_vel_high) & \
-                   (tracking_episode_length_mean > tracking_episode_length)
-                promote_envs = valid_envs[promote_mask]                         # again maybe empty
+            cond = (tracking_lin_vel_x_mean   > tracking_lin_vel_high)  & \
+            (tracking_ang_vel_x_mean   > tracking_ang_vel_high)  & \
+            (tracking_episode_length_mean > tracking_episode_length)
 
-                if promote_envs.numel():
-                    self.unlocked_levels[promote_envs] = torch.clamp(
-                    self.unlocked_levels[promote_envs] + 1,
-                    max=self.max_terrain_level + 1
-                    )
+            if cond:
+                self.unlocked_levels = torch.clamp(
+                self.unlocked_levels + 1,
+                max=self.max_terrain_level + 1
+                )               
+                next_lvl = torch.clamp(current_max + 1, max=self.max_terrain_level)
+                self.target_levels.fill_(next_lvl)
 
-                    unlocked_cap = torch.clamp(
-                        self.unlocked_levels[promote_envs],
-                        max=self.max_terrain_level)  
+                # Resample the target terrain level
+                span = self.target_levels - self.min_terrain_level  
+                u = torch.rand_like(span, dtype=torch.float)
+                power = 0
+                offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
+                new_targets = offset + self.min_terrain_level
+                self.target_levels = new_targets
 
-                    span = unlocked_cap - self.min_terrain_level  
-                    u = torch.rand_like(span, dtype=torch.float)
-                    power = 0
-                    offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
-                    old_levels = self.terrain_levels[promote_envs]
-                    new_levels = offset + self.min_terrain_level
-                    self.terrain_levels[promote_envs] = new_levels
-                    changed_mask = new_levels != old_levels
-                    if changed_mask.any():
-                        self._clear_tracking_history(promote_envs[changed_mask])
-        
-        new_levels = self.terrain_levels[env_ids]
-        unique_levels, inverse_idx = torch.unique(new_levels, return_inverse=True)
+        pending_mask = self.terrain_levels[env_ids] != self.target_levels[env_ids]
+        pending_envs = env_ids[pending_mask]
+        new_levels = self.target_levels[pending_envs]
+        old_levels = self.terrain_levels[pending_envs]
+        self.terrain_levels[pending_envs] = new_levels
+        changed_mask = new_levels != old_levels
+        if changed_mask.any():
+            self._clear_tracking_history(pending_envs[changed_mask])
+
+        unique_levels, inverse_idx = torch.unique(self.terrain_levels[env_ids], return_inverse=True)
         for i, lvl in enumerate(unique_levels):
             # Get which envs in env_ids map to this terrain level
             group = env_ids[inverse_idx == i]
@@ -657,6 +621,7 @@ class AnymalTerrainTask(RLTask):
     def get_terrain(self, create_mesh=True):
         self.env_origins = torch.zeros((self.num_envs, 3), device=self.device, requires_grad=False)
         self.terrain_levels = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
+        self.target_levels = self.terrain_levels.clone()
         self.unlocked_levels = torch.zeros_like(self.terrain_levels)
         self._create_trimesh(create_mesh=create_mesh)
         levels = self.terrain_details[:, 1].long()  # shape: (N, ) where N=# of terrain blocks
@@ -1145,7 +1110,7 @@ class AnymalTerrainTask(RLTask):
             self._set_friction(self._anymals._foot, env_ids=env_ids)
 
         if self.vel_curriculum:
-            self._init_command_ranges_by_terrain()
+            self._init_command_distribution()
         self._prepare_reward_function()
 
         # Define maximum length of tracking history
@@ -1175,7 +1140,6 @@ class AnymalTerrainTask(RLTask):
         indices = env_ids.to(dtype=torch.int32)
 
         if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
-            self.update_command_curriculum(env_ids)
             self._resample_commands(env_ids)
         else:
             self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
@@ -1295,6 +1259,10 @@ class AnymalTerrainTask(RLTask):
             # after that, always zero it
             self.progress_buf[env_ids] = 0  
 
+        self.extras["time_outs"] = self.timeout_buf
+        self.extras["episode"]["min_action"] = torch.min(self.actions)
+        self.extras["episode"]["max_action"] = torch.max(self.actions)
+
         if self.curriculum:
             self.extras["episode"]["current_terrain_level"] = torch.mean(self.terrain_levels.float())
             self.extras["episode"]["unlocked_terrain_levels"] = torch.mean(self.unlocked_levels.float())
@@ -1302,17 +1270,26 @@ class AnymalTerrainTask(RLTask):
             for lvl in unique_levels:
                 cnt = int((self.terrain_levels == lvl).sum().item())
                 self.extras["episode"][f"num_robots_level_{int(lvl.item())}"] = cnt
-        self.extras["time_outs"] = self.timeout_buf
-        self.extras["episode"]["min_action"] = torch.min(self.actions)
-        self.extras["episode"]["max_action"] = torch.max(self.actions)
-    
-        if self.vel_curriculum:                         
-            for terr_id, row in self._id2row.items():   # ORIGINAL terrain IDs
-                vx_min, vx_max, vy_min, vy_max, wz_min, wz_max = \
-                    self.command_ranges_by_terrain[row]
-                prefix = f"tid{terr_id}_"               # e.g. "tid3_"
-                self.extras["episode"][prefix + "vx_min"] = vx_min.item()
-                self.extras["episode"][prefix + "vx_max"] = vx_max.item()
+            unique_types = torch.unique(self.terrain_types)
+            for t in unique_types:
+                cnt = int((self.terrain_types == t).sum().item())
+                self.extras["episode"][f"num_robots_type_{int(t.item())}"] = cnt
+
+        if self.vel_curriculum:
+            for cur, cat in zip(self.curricula, self.category_names):
+                self.extras["episode"][f"command_area_{cat}"] = np.sum(cur.weights) / cur.weights.shape[0]
+            
+            terrain_types = self.terrain_types[env_ids]
+            for t in torch.unique(terrain_types):
+                mask = terrain_types == t
+                cmds = self.commands[env_ids[mask]]
+                max_x = cmds[:, 0].abs().max().item()
+                max_y = cmds[:, 1].abs().max().item()
+                max_yaw = cmds[:, 2].abs().max().item()
+
+                self.extras["episode"][f"terrain_{int(t.item())}/max_cmd_x_vel"]= max_x
+                self.extras["episode"][f"terrain_{int(t.item())}/max_cmd_y_vel"]= max_y
+                self.extras["episode"][f"terrain_{int(t.item())}/max_cmd_yaw_vel"]= max_yaw
 
 
     def refresh_dof_state_tensors(self):

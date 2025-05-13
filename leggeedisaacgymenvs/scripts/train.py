@@ -81,12 +81,12 @@ class RLGTrainer:
                 if env.world.is_playing():
                     if first_frame:
                         env.reset()
-                        env.simulation_app.update()
-                        env.world.reset()
-                        env.world.reset()
-                        env.simulation_app.update()
-                        env.world.reset()
-                        env.simulation_app.update()
+                        # env.simulation_app.update()
+                        # env.world.reset()
+                        # env.world.reset()
+                        # env.simulation_app.update()
+                        # env.world.reset()
+                        # env.simulation_app.update()
                         first_frame = False
                     else:
                         if step_counter >= max_steps:
@@ -196,14 +196,14 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.terrain.oobActive = False
 
         cfg.task.env.terrain.terrain_types = [
-            # {
-            #     "name": "flat",
-            #     "particle_present": False,
-            #     "compliant": True,
-            #     "row_count": 2,
-            #     "col_count": 1,
-            #     "level": 0,
-            # },
+            {
+                "name": "flat",
+                "particle_present": False,
+                "compliant": True,
+                "row_count": 2,
+                "col_count": 1,
+                "level": 0,
+            },
             {
                 "name": "central_depression_terrain",
                 "compliant": True,

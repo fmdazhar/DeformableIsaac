@@ -126,7 +126,9 @@ class VecEnvBase(gym.Env):
 
         if init_sim:
             self._world.reset()
-
+        # import carb
+        # carb.settings.get_settings().set_bool("/physics/suppressReadback", False)
+    
     def update_task_params(self):
         self._num_envs = self._task.num_envs
         self.observation_space = self._task.observation_space
