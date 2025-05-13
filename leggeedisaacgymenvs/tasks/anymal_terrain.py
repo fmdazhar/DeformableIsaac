@@ -1145,7 +1145,7 @@ class AnymalTerrainTask(RLTask):
             return
         indices = env_ids.to(dtype=torch.int32)
 
-        if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
+        if self.vel_curriculum:
             self._resample_commands(env_ids)
         else:
             self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
@@ -1356,6 +1356,9 @@ class AnymalTerrainTask(RLTask):
                 self._randomize_gravity()
             if self.randomize_pbd and (self.common_step_counter % self.randomize_pbd_interval == 0):
                 self.randomize_pbd_material()
+            if self.vel_curriculum:
+                env_ids = (self.progress_buf % (self.max_episode_length / 2) == 0).nonzero(as_tuple=False).flatten()
+                self._resample_commands(env_ids)
 
             # prepare quantities
             self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])

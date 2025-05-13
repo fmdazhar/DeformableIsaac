@@ -17,8 +17,7 @@ env:
     lin_vel_y:     [-1, 1]
     ang_vel_yaw:   [-1, 1]
     curriculum_thresholds:
-      delta_lin_vel_x: 0.3
-      tracking_length: 5
+      tracking_length: 1
       tracking_lin_vel_high: 0.8
       tracking_lin_vel_low: 0.7
       tracking_ang_vel_high: 0.75
@@ -41,7 +40,7 @@ env:
 
     curriculum: True
     curriculum_thresholds:
-      tracking_length: 35
+      tracking_length: 40
       tracking_lin_vel_high: 0.7
       tracking_ang_vel_high: 0.7
       tracking_eps_length_high: 0.9
