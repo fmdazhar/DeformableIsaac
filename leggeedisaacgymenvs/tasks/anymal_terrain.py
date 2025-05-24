@@ -413,9 +413,11 @@ class AnymalTerrainTask(RLTask):
         unique_types = torch.unique(static_types).cpu().tolist()
         self.type2idx      = {t: i for i, t in enumerate(unique_types)}
         self.category_names = [f"terrain_{t}" for t in unique_types]
+        cfg_seed = self._task_cfg["env"]["commands"]["curriculum_seed"]
+        seed = None if cfg_seed == -1 else int(cfg_seed)
         self.curricula = [
             RewardThresholdCurriculum(
-                seed = self._task_cfg["env"]["commands"]["curriculum_seed"],
+                seed = seed,
                 x_vel=(self.limit_vel_x[0],   self.limit_vel_x[1],  self.command_curriculum_cfg["num_bins_vel_x"]),
                 y_vel=(self.limit_vel_y[0],   self.limit_vel_y[1],  self.command_curriculum_cfg["num_bins_vel_y"]),
                 yaw_vel=(self.limit_vel_yaw[0], self.limit_vel_yaw[1],self.command_curriculum_cfg["num_bins_vel_yaw"]),
@@ -558,12 +560,16 @@ class AnymalTerrainTask(RLTask):
                 ang_hist.mean().item(),
                 len_hist.float().mean().item()
             ]
+            mean_lin = lin_hist.mean(dim=0)
+            mean_ang = ang_hist.mean(dim=0)
+            mean_len = len_hist.float().mean(dim=0)
+
             above_low = all(r > h for r, h in zip(rewards, low_thr))
             above_high = all(r > h for r, h in zip(rewards, high_thr))
             successes = (mean_lin > high_thr[0]) & (mean_ang > high_thr[1]) & (mean_len > high_thr[2])
             failures  = (mean_lin <  low_thr[0]) & (mean_ang <  low_thr[1]) & (mean_len <  low_thr[2])
             if successes.any():
-                delta = 0.2
+                delta = 1
                 selected_envs = all_envs[successes]                 
                 bin_ids = self.env_command_bins[selected_envs.cpu().numpy()]
                 cur = self.curricula[int(cur_idx)]
@@ -592,8 +598,8 @@ class AnymalTerrainTask(RLTask):
             # do not change on initial reset
             return
 
-        current_max = self.unlocked_levels[valid_envs].max() 
-        at_cap    = self.terrain_levels[valid_envs] == current_max 
+        current_max = self.unlocked_levels[env_ids].max() 
+        at_cap    = self.terrain_levels[env_ids] == current_max 
         cond = self.oob[env_ids]
         mask = at_cap & cond
         valid_envs = env_ids[mask]
@@ -1047,7 +1053,7 @@ class AnymalTerrainTask(RLTask):
             self.base_init_state, dtype=torch.float, device=self.device, requires_grad=False
         )
 
-        self.timeout_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.timeout_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
         # initialize some data used later on
         self.up_axis_idx = 2
@@ -1201,7 +1207,7 @@ class AnymalTerrainTask(RLTask):
         self._prepare_reward_function()
 
         # Define maximum length of tracking history
-        self.tracking_history_len = self.terrain_curriculum_cfg["tracking_length"]
+        self.tracking_history_len = self.command_curriculum_cfg["tracking_length"]
         # Initialize linear velocity tracking buffer and index for each env
         self.tracking_lin_vel_x_history = torch.zeros((self.num_envs, self.tracking_history_len), device=self.device)
         self.tracking_lin_vel_x_history_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -1479,8 +1485,7 @@ class AnymalTerrainTask(RLTask):
                 self._randomize_gravity()
             if self.randomize_pbd and (self.common_step_counter % self.randomize_pbd_interval == 0):
                 self.randomize_pbd_material()
-            if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
-                self._resample_commands(env_ids)
+
 
             # prepare quantities
             self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])
@@ -1530,10 +1535,10 @@ class AnymalTerrainTask(RLTask):
 
         self.timeout_buf = (self.progress_buf > self.max_episode_length) | self.oob # no terminal reward for time-outs
         self.body_height_buf = torch.mean(self.base_pos[:, 2].unsqueeze(1) - self.measured_heights, dim=1) \
-                                   < self._task_cfg["env"]["learn"]["terminalBodyHeight"]
+                                   > self._task_cfg["env"]["learn"]["terminalBodyHeight"]
 
-        self.reset_buf |= self.body_height_buf.clone
-        self.reset_buf |= self.timeout_buf.clone
+        self.reset_buf |= self.body_height_buf.clone()
+        self.reset_buf |= self.timeout_buf.clone()
         
 
     def _prepare_reward_function(self):

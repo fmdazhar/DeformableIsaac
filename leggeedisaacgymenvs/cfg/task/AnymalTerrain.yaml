@@ -8,7 +8,7 @@ env:
   # clipActions: 5
 
   commands:
-    curriculum_seed: 0
+    curriculum_seed: 42
     VelocityCurriculum: True
     limit_vel_x:     [-3.0, 3.0]
     limit_vel_y:     [-1.0, 1.0]
@@ -17,11 +17,10 @@ env:
     lin_vel_y:     [-1, 1]
     ang_vel_yaw:   [-3, 3]
     curriculum_thresholds:
-
       tracking_length: 1
       tracking_lin_vel_high: 0.9
       tracking_lin_vel_low: 0.85
-      tracking_ang_vel_high: 0.83
+      tracking_ang_vel_high: 0.80
       tracking_ang_vel_low: 0.8
       tracking_eps_length_high: 0.95
       tracking_eps_length_low: 0.85
@@ -47,8 +46,8 @@ env:
     oobActive: False
     oobBuffer: 0.5
     
-    mapLength: 8.
-    mapWidth: 8.
+    mapLength: 10.
+    mapWidth: 10.
     # tri mesh only:
     slopeTreshold: 0.5
 
@@ -255,8 +254,8 @@ env:
       dof_pos_limits: -10.0
       # delta_torques: -1.0e-7
       # hip_motion: -0.5
-      # orientation: -1.0
-      feet_contact_forces: -0.01 #-0.01
+      orientation: -1.0
+      # feet_contact_forces: -0.01 #-0.01
       termination: -1.0
 
     onlyPositiveRewards: True

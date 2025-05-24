@@ -96,8 +96,8 @@ class A1(Robot):
     def prepare_contacts(self, stage, prim):
         for link_prim in prim.GetChildren():
             path = str(link_prim.GetPrimPath())
-            if not ("trunk" in path or path.endswith("_foot")):
-                continue
+            # if not ("trunk" in path or path.endswith("_foot")):
+            #     continue
             if link_prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
                 rb = PhysxSchema.PhysxRigidBodyAPI.Get(stage, link_prim.GetPrimPath())
                 rb.CreateSleepThresholdAttr().Set(0)
