@@ -113,6 +113,9 @@ class VecEnvBase(gym.Env):
         self._world = World(
             stage_units_in_meters=1.0, rendering_dt=rendering_dt, backend=backend, sim_params=sim_params, device=device
         )
+        import carb
+        from omni.isaac.core.simulation_context import SimulationContext
+
         self._world._current_tasks = dict()
         self._world.add_task(task)
         self._task = task
@@ -126,9 +129,12 @@ class VecEnvBase(gym.Env):
 
         if init_sim:
             self._world.reset()
-        # import carb
+
         # carb.settings.get_settings().set_bool("/physics/suppressReadback", False)
-    
+        # simulation_context = SimulationContext.instance()
+        # simulation_context.get_physics_context().enable_gpu_dynamics(True)
+        # simulation_context.get_physics_context().set_broadphase_type("GPU")
+
     def update_task_params(self):
         self._num_envs = self._task.num_envs
         self.observation_space = self._task.observation_space
