@@ -12,7 +12,7 @@ class Terrain:
         self.cfg = cfg
         self.horizontal_scale = 0.1
         self.vertical_scale = 0.005
-        self.border_size = 20
+        self.border_size = 30
 
         # Map dimensions in meters
         self.env_length = cfg["mapLength"]

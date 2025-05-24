@@ -1,7 +1,3 @@
-
-
-
-
 import copy
 
 import carb
@@ -38,7 +34,6 @@ class SimConfig:
             if self._sim_params["enable_cameras"] or self._config.get("enable_recording", False):
                 enable_extension("omni.replicator.isaac")
 
-        self._sim_params["warp"] = self._config["warp"]
         self._sim_params["sim_device"] = self._config["sim_device"]
 
         self._adjust_dt()
@@ -178,7 +173,6 @@ class SimConfig:
 
         self.task_config["renderingInterval"] = max(round((1/physics_dt) / (1/rendering_dt)), 1)
 
-        # we always set rendering dt to be the same as physics dt, stepping is taken care of in VecEnvRLGames
         self.sim_params["rendering_dt"] = physics_dt
 
     @property

@@ -10,24 +10,25 @@ env:
   commands:
     curriculum_seed: 0
     VelocityCurriculum: True
-    limit_vel_x:     [-10.0, 10.0]
-    limit_vel_y:     [-0.6, 0.6]
-    limit_vel_yaw:   [-10, 10]
+    limit_vel_x:     [-3.0, 3.0]
+    limit_vel_y:     [-1.0, 1.0]
+    limit_vel_yaw:   [-3.0, 3.0]
     lin_vel_x:     [-1, 1]
     lin_vel_y:     [-1, 1]
-    ang_vel_yaw:   [-1, 1]
+    ang_vel_yaw:   [-3, 3]
     curriculum_thresholds:
-      delta_lin_vel_x: 0.3
-      tracking_length: 5
-      tracking_lin_vel_high: 0.8
-      tracking_lin_vel_low: 0.7
-      tracking_ang_vel_high: 0.75
-      tracking_ang_vel_low: 0.7
+
+      tracking_length: 1
+      tracking_lin_vel_high: 0.9
+      tracking_lin_vel_low: 0.85
+      tracking_ang_vel_high: 0.83
+      tracking_ang_vel_low: 0.8
       tracking_eps_length_high: 0.95
-      tracking_eps_length_low: 0.9
-      num_bins_vel_x: 30
-      num_bins_vel_y: 3
-      num_bins_vel_yaw: 30
+      tracking_eps_length_low: 0.85
+      num_bins_vel_x: 21
+      num_bins_vel_y: 7
+      num_bins_vel_yaw: 21
+
 
   terrain:
     measureHeights: True
@@ -41,10 +42,7 @@ env:
 
     curriculum: True
     curriculum_thresholds:
-      tracking_length: 35
-      tracking_lin_vel_high: 0.7
-      tracking_ang_vel_high: 0.7
-      tracking_eps_length_high: 0.9
+      power: 0.0
 
     oobActive: False
     oobBuffer: 0.5
@@ -105,7 +103,8 @@ env:
 
     particles:
       enabled: False
-      use_mesh_sampler: False
+      reset_check: False
+      particle_reset_threshold: 0.8
       system1:
         pbd_material_friction: 0.8 # Friction value for particles
         pbd_material_density: 1500 # Density of particle material (kg/m³)
@@ -131,7 +130,6 @@ env:
         particle_grid_jitter_factor: 0.2 # Random jitter factor for particle spacing (as a fraction of particle spacing)
         particle_grid_self_collision: True # Enable self-collision within the particle grid
         particle_grid_fluid: False # Set to True if particles should behave like a fluid
-        particle_grid_particle_group: 0 # Group ID for particles, used for grouping behaviors
         particle_grid_particle_mass: 0.0 # Mass of each particle (can be overridden by density)
         particle_grid_density: 0.0 # Density of particles (optional, overrides individual mass)
 
@@ -156,11 +154,10 @@ env:
         particle_system_max_depenetration_velocity: 100.0 # Maximum velocity for depenetration corrections
 
         # Particle grid generation parameters
-        particle_grid_spacing: 2.5
+        particle_grid_spacing: 2.5 #keep it greater than 2
         particle_grid_jitter_factor: 0.2 # Random jitter factor for particle spacing (as a fraction of particle spacing)
         particle_grid_self_collision: True # Enable self-collision within the particle grid
         particle_grid_fluid: False # Set to True if particles should behave like a fluid
-        particle_grid_particle_group: 0 # Group ID for particles, used for grouping behaviors
         particle_grid_particle_mass: 0.0 # Mass of each particle (can be overridden by density)
         particle_grid_density: 0.0 # Density of particles (optional, overrides individual mass)
 
@@ -188,7 +185,6 @@ env:
         particle_grid_jitter_factor: 0.2
         particle_grid_self_collision: True
         particle_grid_fluid: True
-        particle_grid_particle_group: 0
         particle_grid_particle_mass: 0.0
         particle_grid_density: 0.0
 
@@ -254,7 +250,7 @@ env:
       torques: -0.0002 #-0.0002
       dof_acc: -2.5e-7
       feet_air_time: 1.0 #0.01 #1.0
-      collision: -1. #-1.
+      collision: 0. #-1.
       action_rate: -0.01
       dof_pos_limits: -10.0
       # delta_torques: -1.0e-7
@@ -263,9 +259,6 @@ env:
       feet_contact_forces: -0.01 #-0.01
       termination: -1.0
 
-
-      
-
     onlyPositiveRewards: True
     baseHeightTarget: 0.25
     softDofPositionLimit: 0.9
@@ -273,6 +266,7 @@ env:
     softTorqueLimit: 0.5
     trackingSigma: 0.25
     maxContactForce: 100.0
+    terminalBodyHeight: 0.5
 
     # normalization
     linearVelocityScale: 2.0
@@ -349,7 +343,6 @@ env:
             pbd_material_particle_adhesion_scale_range: [500, 3000]
             pbd_material_density_range: [1000, 2500]
             pbd_material_damping_range: [2, 2]
-
 
           system2: #0.15
             enabled: True

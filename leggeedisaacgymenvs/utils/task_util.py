@@ -26,7 +26,7 @@ def initialize_task(config, env, init_sim=True):
         name=cfg["task_name"], sim_config=sim_config, env=env
     )
 
-    backend = "warp" if cfg["warp"] else "torch"
+    backend = "torch"
 
     rendering_dt = sim_config.get_physics_params()["rendering_dt"]
 

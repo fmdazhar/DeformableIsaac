@@ -27,6 +27,7 @@ class VecEnv(VecEnvBase):
         self.num_height_points = self._task._num_height_points
         self.num_privileged_obs = self._task._num_privileged_observations
         self.num_proprio = self._task._num_proprio
+        self.num_scan = self._task._num_height_points
         self.num_priv = self._task._num_priv
         self.history_len = self._task._obs_history_length
         self.num_obs_history = self._task._num_obs_history

@@ -17,20 +17,20 @@ class A1View(ArticulationView):
         """[summary]"""
 
         super().__init__(prim_paths_expr=prim_paths_expr, name=name, reset_xform_properties=False)
-        self._thigh = RigidPrimView(
-            prim_paths_expr="/World/envs/.*/a1/.*_thigh",
-            name="thigh_view",
-            reset_xform_properties=False,
-            track_contact_forces=track_contact_forces,
-            prepare_contact_sensors=prepare_contact_sensors,
-        )
-        self._calf = RigidPrimView(
-            prim_paths_expr="/World/envs/.*/a1/.*_calf",
-            name="calf_view",
-            reset_xform_properties=False,
-            track_contact_forces=track_contact_forces,
-            prepare_contact_sensors=prepare_contact_sensors,
-        )
+        # self._thigh = RigidPrimView(
+        #     prim_paths_expr="/World/envs/.*/a1/.*_thigh",
+        #     name="thigh_view",
+        #     reset_xform_properties=False,
+        #     track_contact_forces=track_contact_forces,
+        #     prepare_contact_sensors=prepare_contact_sensors,
+        # )
+        # self._calf = RigidPrimView(
+        #     prim_paths_expr="/World/envs/.*/a1/.*_calf",
+        #     name="calf_view",
+        #     reset_xform_properties=False,
+        #     track_contact_forces=track_contact_forces,
+        #     prepare_contact_sensors=prepare_contact_sensors,
+        # )
         self._base = RigidPrimView(
             prim_paths_expr="/World/envs/.*/a1/trunk",
             name="base_view",

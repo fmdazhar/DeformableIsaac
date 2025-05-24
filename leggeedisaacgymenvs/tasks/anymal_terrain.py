@@ -3,15 +3,17 @@ import numpy as np
 import torch
 import omni
 import carb
+import copy
+
+from collections import defaultdict
+from typing import Dict, List, Tuple
 
 from omni.isaac.core.simulation_context import SimulationContext
 from omni.isaac.core.utils.prims import get_prim_at_path, find_matching_prim_paths, is_prim_path_valid
 from omni.isaac.core.utils.stage import get_current_stage
 from omni.isaac.core.utils.torch.rotations import *
 from omni.isaac.core.prims import RigidPrimView
-# from omni.isaac.core.utils.torch.maths import tensor_clamp, torch_rand_float, unscale
 from omni.isaac.core.prims.soft.particle_system import ParticleSystem
-from omni.isaac.core.prims.soft.particle_system_view import ParticleSystemView
 
 from leggeedisaacgymenvs.tasks.base.rl_task import RLTask
 from leggeedisaacgymenvs.robots.articulations.a1 import A1
@@ -39,16 +41,17 @@ class AnymalTerrainTask(RLTask):
         self._cfg = sim_config.config
         self._task_cfg = sim_config.task_config
         self._device = self._cfg["sim_device"]
+        self.test = self._cfg["test"]
         self.update_config()
 
         self._num_actions = 12
         self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4
         self._num_privileged_observations = None
-        # self._num_priv = 28 #4 + 4 + 4 + 1 + 3 + 12 
+        # self._num_priv = 28 # 4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
         # If measure_heights is True, we add that to the final observation dimension
         if self.measure_heights:
-            self._num_height_points = 36 #140
+            self._num_height_points = 100 #140
         else:
             self._num_height_points = 0
         self._num_obs_history = self._obs_history_length * (self._num_proprio + self._num_height_points)
@@ -60,8 +63,11 @@ class AnymalTerrainTask(RLTask):
                                 + self._num_height_points
 
         RLTask.__init__(self, name, env)
-
-        self._num_train_envs = self.num_envs
+        
+        # joint positions offsets
+        self.default_dof_pos = torch.zeros(
+            (self.num_envs, 12), dtype=torch.float, device=self.device, requires_grad=False
+        )
 
         if self.measure_heights:
             self.height_points = self.init_height_points()
@@ -80,12 +86,13 @@ class AnymalTerrainTask(RLTask):
         self.created_materials = {}
         self.particle_instancers_by_level = {}
         self._terrains_by_level = {}  # dictionary: level -> (tensor of row indices)
+        self._particle_rows_by_level: Dict[int, List[int]] = {}
         self.total_particles = 0    # Initialize a counter for total particles
-
-        # joint positions offsets
-        self.default_dof_pos = torch.zeros(
-            (self.num_envs, 12), dtype=torch.float, device=self.device, requires_grad=False
-        )
+        # track which terrain *levels* already have their particle assets in USD
+        self._instantiated_particle_levels: set[int] = set()
+        self.initial_particle_positions: dict[tuple[int, str], np.ndarray] = {}
+        self.current_particle_positions = {}
+        self.particle_counts: Dict[Tuple[int, str], int] = {}
 
         return
 
@@ -195,14 +202,19 @@ class AnymalTerrainTask(RLTask):
 
         self._task_cfg["sim"]["add_ground_plane"] = False
         self._particle_cfg = self._task_cfg["env"]["terrain"]["particles"]
+        self._particle_cfg_original = copy.deepcopy(self._particle_cfg)
 
         self.terrain = Terrain(self._task_cfg["env"]["terrain"])
         self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float, device=self.device)
+        self.bounds = {
+            int(row[0]): (int(row[10]), int(row[11]), int(row[12]), int(row[13]))
+            for row in self.terrain_details
+        }
 
         self._particles_active = (self.terrain_details[:, 5] > 0).any().item()
         self._compliance_active = (self.terrain_details[:, 6] > 0).any().item()
         
-        if self._particles_active and self.priv_pbd_particle:
+        if self.priv_pbd_particle:
             self.init_pbd()
         else:
             self.pbd_range = None
@@ -215,7 +227,7 @@ class AnymalTerrainTask(RLTask):
 
         self._num_priv = (
             (64 if self.priv_base else 0)
-        + (8  if (self._compliance_active and self.priv_compliance) else 0)
+        + (8  if self.priv_compliance else 0)
         + (self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0)
         )
         print(f"Num priv: {self._num_priv}")
@@ -266,7 +278,7 @@ class AnymalTerrainTask(RLTask):
             sro_vals.append(solid_rest_offset)
 
 
-        systems_cfg = (
+        all_systems_cfg = (
                 self._task_cfg["env"]["randomizationRanges"]
                             ["material_randomization"]["particles"]["systems"]
             )
@@ -274,8 +286,8 @@ class AnymalTerrainTask(RLTask):
         # merge ranges by parameter name
         merged = {}
         self.pbd_by_sys = {}
-        for sys_name in active_system_ids:
-            cfg = systems_cfg.get(sys_name, {})
+        for sys_name, cfg in all_systems_cfg:
+            # cfg = systems_cfg.get(sys_name, {})
             if not cfg.get("enabled", False):
                 continue
             local = []
@@ -310,7 +322,6 @@ class AnymalTerrainTask(RLTask):
                                            device=self.device)
         self._pbd_idx = {name: i for i, name in enumerate(self.pbd_param_names)}
 
-
         scale_shift_pairs = [self.get_scale_shift(rng) for rng in self.pbd_range]
         scales, shifts = zip(*scale_shift_pairs)
         self.pbd_scale = torch.tensor(scales, dtype=torch.float32, device=self.device)   # shape: [num_params]
@@ -339,10 +350,10 @@ class AnymalTerrainTask(RLTask):
         
     def init_height_points(self):
         y = 0.1 * torch.tensor(
-            [-1, 0, 1], device=self.device, requires_grad=False
+            [-2,-1, 0, 1, 2], device=self.device, requires_grad=False
         )
         x = 0.1 * torch.tensor(
-            [-1, 0, 1], device=self.device, requires_grad=False
+            [-2,-1, 0, 1, 2], device=self.device, requires_grad=False
         )
         
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
@@ -357,10 +368,10 @@ class AnymalTerrainTask(RLTask):
                                            
     def init_particle_height_points(self):
         y = 0.1 * torch.tensor(
-            [-2, -1, 0, 1, 2], device=self.device, requires_grad=False
+            [-3,-2, -1, 0, 1, 2, 3], device=self.device, requires_grad=False
         )
         x = 0.1 * torch.tensor(
-            [-2, -1, 0, 1, 2], device=self.device, requires_grad=False
+            [-3, -2, -1, 0, 1, 2, 3], device=self.device, requires_grad=False
         )
         grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
         num_points = grid_x.numel()
@@ -424,139 +435,198 @@ class AnymalTerrainTask(RLTask):
             cur.set_to(low=low, high=high)
 
 
-    def _resample_commands(self, env_ids):
-        """
-        Resample (x vel, y vel, yaw vel) commands for the envs in `env_ids`.
-        Curriculum progress is now estimated from the *last* entry of the
-        tracking-history buffers instead of the aggregated episode‐sums.
-        """
+    # def _resample_commands(self, env_ids):
+    #     """
+    #     Resample (x vel, y vel, yaw vel) commands for the envs in `env_ids`.
+    #     Curriculum progress is now estimated from the *last* entry of the
+    #     tracking-history buffers instead of the aggregated episode‐sums.
+    #     """
+    #     if len(env_ids) == 0:
+    #         return
+            
+    #     self.env_command_categories = torch.as_tensor(
+    #         [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
+    #         dtype=torch.long,
+    #         device=self.device,
+    #     )
+    #     window_size = self.command_curriculum_cfg["tracking_length"]
+    #     last = torch.stack(
+    #         [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
+    #         for k in range(window_size) ],
+    #         dim=0
+    #     ) 
+
+    #     # Curriculum success thresholds
+    #     thr = [
+    #         self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt,
+    #         self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt,
+    #         self.command_curriculum_cfg["tracking_eps_length_high"]
+    #     ]
+
+    #     # Split envs by terrain-type curriculum --------------------------
+    #     cats = self.env_command_categories[env_ids.cpu()]                        
+    #     for cur_idx in torch.unique(cats):
+    #         mask = (cats == cur_idx)
+    #         sub_envs = env_ids[mask]                                            
+    #         if sub_envs.numel() == 0:
+    #             continue
+    #         # ---- pull the last-window rewards & episode lengths, shape: [W, B]
+    #         idx = last[:, sub_envs]
+    #         tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[sub_envs.unsqueeze(0), idx]
+    #         tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[sub_envs.unsqueeze(0), idx]
+    #         leng  = self.ep_length_history        [sub_envs.unsqueeze(0), idx]
+
+    #         # ignore if any of the last-window slots are still zero
+    #         if not ((tracking_lin_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
+    #             continue
+
+    #         r_mean_lin = tracking_lin_vel_x_history.mean().item()
+    #         r_mean_ang = tracking_ang_vel_x_history.mean().item()
+    #         l_mean = leng.float().mean().item()
+
+    #         rewards = [r_mean_lin, r_mean_ang, l_mean]
+
+    #         # Let the curriculum object update its bin statistics
+    #         cur = self.curricula[int(cur_idx)]
+    #         old_bins = self.env_command_bins[sub_envs.cpu().numpy()]
+    #         cur.update(old_bins, rewards, thr,
+    #                         local_range=np.array([0.55, 0.55, 0.55]))
+
+    #         # Sample new commands & assign them
+    #         new_cmds, new_bins = cur.sample(batch_size=sub_envs.numel())
+    #         changed_mask = new_bins != old_bins
+    #         if changed_mask.any():                               # at least one env moved
+    #             changed_envs = sub_envs[torch.from_numpy(changed_mask)
+    #                                     .to(sub_envs.device)]
+    #             self._clear_tracking_history(changed_envs)
+
+    #         self.env_command_bins     [sub_envs.cpu().numpy()] = new_bins
+    #         cmd_tensor = torch.tensor(
+    #             new_cmds[:, :3], dtype=self.commands.dtype, device=self.device
+    #         )
+    #         self.commands[sub_envs, :3] = cmd_tensor
+
+
+    def _update_command_distribution(self, env_ids):
         if len(env_ids) == 0:
             return
-            
+        # 1) Refresh the terrain‐type categories for all envs
         self.env_command_categories = torch.as_tensor(
             [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
             dtype=torch.long,
             device=self.device,
         )
-        window_size = self.command_curriculum_cfg["tracking_length"]
-        last = torch.stack(
-            [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
-            for k in range(window_size) ],
-            dim=0
-        ) 
 
-        # Curriculum success thresholds
-        thr = [
+        # 2) Precompute the “last-window” indices into the history buffers
+        window_size = self.command_curriculum_cfg["tracking_length"]
+        last = torch.stack([
+            (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
+            for k in range(window_size)
+        ], dim=0)
+
+        # 3) Define the success thresholds
+        high_thr = [
             self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt,
             self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt,
             self.command_curriculum_cfg["tracking_eps_length_high"]
         ]
+        low_thr = [
+            self.command_curriculum_cfg["tracking_lin_vel_low"] * self.reward_scales["tracking_lin_vel"] / self.dt,
+            self.command_curriculum_cfg["tracking_ang_vel_low"] * self.reward_scales["tracking_ang_vel"] / self.dt,
+            self.command_curriculum_cfg["tracking_eps_length_low"]
+        ]
 
-        # Split envs by terrain-type curriculum --------------------------
-        cats = self.env_command_categories[env_ids.cpu()]                        
-        for cur_idx in torch.unique(cats):
-            mask = (cats == cur_idx)
-            sub_envs = env_ids[mask]                                            
+        # ----- A) Update each curriculum from *all* envs of that terrain type -----
+        cats_reset = self.env_command_categories[env_ids.cpu()]
+        for cur_idx in cats_reset:
+            all_envs = env_ids[cats_reset == cur_idx]
+            if all_envs.numel() == 0:
+                continue
+
+            # Extract the last-window rewards & lengths for all_envs
+            idx = last[:, all_envs]
+            lin_hist = self.tracking_lin_vel_x_history[all_envs.unsqueeze(0), idx]
+            ang_hist = self.tracking_ang_vel_x_history[all_envs.unsqueeze(0), idx]
+            len_hist = self.ep_length_history[all_envs.unsqueeze(0), idx]
+
+            # Only update if the window is “full” (no zero slots)
+            if not ((lin_hist != 0).all() and (ang_hist != 0).all() and (len_hist != 0).all()):
+                continue
+
+            rewards = [
+                lin_hist.mean().item(),
+                ang_hist.mean().item(),
+                len_hist.float().mean().item()
+            ]
+            above_low = all(r > h for r, h in zip(rewards, low_thr))
+            above_high = all(r > h for r, h in zip(rewards, high_thr))
+            successes = (mean_lin > high_thr[0]) & (mean_ang > high_thr[1]) & (mean_len > high_thr[2])
+            failures  = (mean_lin <  low_thr[0]) & (mean_ang <  low_thr[1]) & (mean_len <  low_thr[2])
+            if successes.any():
+                delta = 0.2
+                selected_envs = all_envs[successes]                 
+                bin_ids = self.env_command_bins[selected_envs.cpu().numpy()]
+                cur = self.curricula[int(cur_idx)]
+                cur.update(bin_ids, delta, local_range=np.array([0.35, 0.35, 0.35]))
+  
+    def _resample_commands(self, env_ids):
+        if len(env_ids) == 0:
+            return
+        cats_reset = self.env_command_categories[env_ids.cpu()]
+        for cur_idx in torch.unique(cats_reset):
+            sub_envs = env_ids[cats_reset == cur_idx]
             if sub_envs.numel() == 0:
                 continue
-            # ---- pull the last-window rewards & episode lengths, shape: [W, B]
-            idx = last[:, sub_envs]
-            tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[sub_envs.unsqueeze(0), idx]
-            tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[sub_envs.unsqueeze(0), idx]
-            leng  = self.ep_length_history        [sub_envs.unsqueeze(0), idx]
 
-            # ignore if any of the last-window slots are still zero
-            if not ((tracking_lin_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
-                continue
-
-            r_mean_lin = tracking_lin_vel_x_history.mean(dim=0)
-            r_mean_ang = tracking_ang_vel_x_history.mean(dim=0)
-            l_mean = leng.float().mean(dim=0)
-
-            rewards = [r_mean_lin, r_mean_ang, l_mean]
-
-            # Let the curriculum object update its bin statistics
             cur = self.curricula[int(cur_idx)]
-            old_bins = self.env_command_bins[sub_envs.cpu().numpy()]
-            cur.update(old_bins, rewards, thr,
-                            local_range=np.array([0.55, 0.55, 0.55]))
-
-            # Sample new commands & assign them
             new_cmds, new_bins = cur.sample(batch_size=sub_envs.numel())
-            changed_mask = new_bins != old_bins
-            if changed_mask.any():                               # at least one env moved
-                changed_envs = sub_envs[torch.from_numpy(changed_mask)
-                                        .to(sub_envs.device)]
-                self._clear_tracking_history(changed_envs)
 
-            self.env_command_bins     [sub_envs.cpu().numpy()] = new_bins
-            cmd_tensor = torch.tensor(
-                new_cmds[:, :3], dtype=self.commands.dtype, device=self.device
-            )
+            # commit the new bins & commands
+            self.env_command_bins[sub_envs.cpu().numpy()] = new_bins
+            cmd_tensor = torch.tensor(new_cmds[:, :3], dtype=self.commands.dtype, device=self.device)
             self.commands[sub_envs, :3] = cmd_tensor
-
 
     def update_terrain_level(self, env_ids):
 
-        if self.init_done:
-            tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
-            tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
-            tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
-            
-            full_hist  = self.tracking_lin_vel_x_history_full 
-            current_max = self.unlocked_levels.max()     
-            at_cap    = self.terrain_levels == current_max   
-            
-            envs = torch.arange(self.num_envs, device=self.device)
-            mask      = at_cap  & full_hist 
-            valid_envs  = envs[mask] 
-            
-            tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean()  
-            tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean()  
-            tracking_episode_length_mean = self.ep_length_history[valid_envs].mean()  
+        if not self.init_done or not self.curriculum or self.test:
+            # do not change on initial reset
+            return
 
-            cond = (tracking_lin_vel_x_mean   > tracking_lin_vel_high)  & \
-            (tracking_ang_vel_x_mean   > tracking_ang_vel_high)  & \
-            (tracking_episode_length_mean > tracking_episode_length)
+        current_max = self.unlocked_levels[valid_envs].max() 
+        at_cap    = self.terrain_levels[valid_envs] == current_max 
+        cond = self.oob[env_ids]
+        mask = at_cap & cond
+        valid_envs = env_ids[mask]
 
-            if cond:
-                self.unlocked_levels = torch.clamp(
-                self.unlocked_levels + 1,
-                max=self.max_terrain_level + 1
-                )               
-                next_lvl = torch.clamp(current_max + 1, max=self.max_terrain_level)
-                self.target_levels.fill_(next_lvl)
+        self.unlocked_levels[valid_envs] = torch.clamp(
+        self.unlocked_levels[valid_envs] + 1,
+        max=self.max_terrain_level
+        )
 
-                # Resample the target terrain level
-                span = self.target_levels - self.min_terrain_level  
-                u = torch.rand_like(span, dtype=torch.float)
-                power = 0
-                offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
-                new_targets = offset + self.min_terrain_level
-                self.target_levels = new_targets
+        # Resample the target terrain level
+        span = self.unlocked_levels[env_ids] - self.min_terrain_level  
+        u = torch.rand_like(span, dtype=torch.float)
+        power = self.terrain_curriculum_cfg["power"]
+        offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
+        new_targets = offset + self.min_terrain_level
+        self.terrain_levels[env_ids] = new_targets
 
-        pending_mask = self.terrain_levels[env_ids] != self.target_levels[env_ids]
-        pending_envs = env_ids[pending_mask]
-        new_levels = self.target_levels[pending_envs]
-        old_levels = self.terrain_levels[pending_envs]
-        self.terrain_levels[pending_envs] = new_levels
-        changed_mask = new_levels != old_levels
-        if changed_mask.any():
-            self._clear_tracking_history(pending_envs[changed_mask])
-
+      
+    def _assign_terrain_blocks(self, env_ids):
         unique_levels, inverse_idx = torch.unique(self.terrain_levels[env_ids], return_inverse=True)
         for i, lvl in enumerate(unique_levels):
+            self.create_particle_systems(int(lvl))
             # Get which envs in env_ids map to this terrain level
             group = env_ids[inverse_idx == i]
             if group.numel() == 0:
                 continue
-
             # Rows for this level
             candidate_indices = self._terrains_by_level[lvl.item()]
             n_envs   = group.shape[0]
             n_cands = candidate_indices.shape[0]
             idxs = torch.arange(n_envs, device=self.device) % n_cands
             chosen_rows = candidate_indices[idxs]
+            self.env_grid[group] = self.terrain_details[chosen_rows, 0].long()
             self.bx_start[group] = self.terrain_details[chosen_rows, 10]
             self.bx_end[group]   = self.terrain_details[chosen_rows, 11]
             self.by_start[group] = self.terrain_details[chosen_rows, 12]
@@ -567,7 +637,6 @@ class AnymalTerrainTask(RLTask):
             rows = self.terrain_details[chosen_rows, 2].long()
             cols = self.terrain_details[chosen_rows, 3].long()
             self.env_origins[group] = self.terrain_origins[rows, cols]
-
         # Update compliance and stored PBD parameters for these newly changed envs
         self.set_compliance(env_ids)
         self.store_pbd_params(env_ids) 
@@ -583,10 +652,6 @@ class AnymalTerrainTask(RLTask):
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
-        if self._particles_active:
-            self.create_particle_systems()
-            self.particle_system_view = ParticleSystemView(prim_paths_expr="/World/particleSystem/*")
-            scene.add(self.particle_system_view)
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
         scene.add(self._anymals._base)
@@ -609,15 +674,11 @@ class AnymalTerrainTask(RLTask):
             scene.remove_object("foot_view", registry_only=True)
         if scene.object_exists("calf_view"):
             scene.remove_object("calf_view", registry_only=True)
-        if scene.object_exists("particle_system_view"):
-            scene.remove_object("particle_system_view", registry_only=True)
+
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
-        if self._particles_active:
-            self.create_particle_systems()
-            self.particle_system_view = ParticleSystemView(prim_paths_expr="/World/particleSystem/*")
-            scene.add(self.particle_system_view)  
+
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
         scene.add(self._anymals._base)
@@ -630,12 +691,21 @@ class AnymalTerrainTask(RLTask):
         self.target_levels = self.terrain_levels.clone()
         self.unlocked_levels = torch.zeros_like(self.terrain_levels)
         self._create_trimesh(create_mesh=create_mesh)
+        # self._add_depression_colliders()
+        
         levels = self.terrain_details[:, 1].long()  # shape: (N, ) where N=# of terrain blocks
+        has_particles = (self.terrain_details[:, 5] > 0)
         unique_levels = torch.unique(levels)
         for lvl in unique_levels:
             mask = (levels == lvl)
             row_indices = torch.nonzero(mask, as_tuple=False).flatten()
             self._terrains_by_level[lvl.item()] = row_indices
+            
+            particle_mask = has_particles & (levels == lvl)
+            particle_rows = torch.nonzero(particle_mask, as_tuple=False).flatten().tolist()
+            if particle_rows:
+                self._particle_rows_by_level[int(lvl)] = particle_rows
+
 
     def get_anymal(self):
         anymal_translation = torch.tensor([0.0, 0.0, 0.42])
@@ -716,14 +786,13 @@ class AnymalTerrainTask(RLTask):
 
     def _set_friction(self ,asset, env_ids, device="cpu"):
         """Update material properties for a given asset."""
-                # resolve environment ids
+        # resolve environment ids
         if env_ids is None:
             env_ids = torch.arange(self._num_envs, dtype=torch.int64, device=device)
         else:
             env_ids = env_ids.cpu()
         materials = asset._physics_view.get_material_properties().to(device)
-        
-        print(f"Current materials: {materials}")
+        # print(f"Current materials: {materials}")
 
         # obtain parameters for sampling friction and restitution values
         static_friction_range = self.friction_range
@@ -741,25 +810,25 @@ class AnymalTerrainTask(RLTask):
 
         bucket_ids = torch.randint(0, num_buckets, (len(env_ids), shapes_per_env), device=device)
         material_samples = material_buckets[bucket_ids]
-        print(f"Material samples: {material_samples}")
-        print(f"Material samples shape: {material_samples.shape}")
-        # material_samples = material_samples.repeat(1, shapes_per_env, 1)
+        # print(f"Material samples: {material_samples}")
+        # print(f"Material samples shape: {material_samples.shape}")
         # print(f"Material samples shape: {material_samples.shape}")
         new_materials = material_samples.view(len(env_ids)*shapes_per_env, 1, 3)
-        print(f"New Material samples shape: {new_materials.shape}")
+        # print(f"New Material samples shape: {new_materials.shape}")
+
         #update material buffer with new samples
         materials[:] = new_materials
 
         # apply to simulation
         asset._physics_view.set_material_properties(materials, env_ids)
-        print(f"Updated materials: {materials}")
-        print(f"Updated materials shape: {materials.shape}")
+        # print(f"Updated materials: {materials}")
+        # print(f"Updated materials shape: {materials.shape}")
         self.static_friction_coeffs = material_samples[:, :, 0].clone().to(self.device)  # shape: (num_envs, shapes_per_env)
         self.dynamic_friction_coeffs = material_samples[:, :, 1].clone().to(self.device)  # shape: (num_envs, shapes_per_env)
         self.restitutions = material_samples[:, :, 2].clone().to(self.device)             # shape: (num_envs, shapes_per_env)
-        print("Static friction coefficients:", self.static_friction_coeffs)
-        print("Dynamic friction coefficients:", self.dynamic_friction_coeffs)
-        print("Restitutions:", self.restitutions)
+        # print("Static friction coefficients:", self.static_friction_coeffs)
+        # print("Dynamic friction coefficients:", self.dynamic_friction_coeffs)
+        # print("Restitutions:", self.restitutions)
 
     def _set_coms(self, view, env_ids):
         """Update material properties for a given view."""
@@ -888,7 +957,6 @@ class AnymalTerrainTask(RLTask):
 
         # Grab unique systems in the batch
         unique_systems = torch.unique(sys_ids)
-
         for sid in unique_systems:
             # Skip system_idx <= 0, which we treat as "no system" or invalid system
             if sid <= 0:
@@ -932,9 +1000,17 @@ class AnymalTerrainTask(RLTask):
             "pbd_material_drag": "DragAttr",
             "pbd_material_cfl_coefficient": "CflCoefficientAttr",
         }
+        
+        active_system_ids = {
+        int(s.item())
+        for s in torch.unique(self.system_idx)
+        if int(s.item()) > 0
+        }
 
         # Process each system in the configuration.
         for sys_id, param_list in self.pbd_by_sys.items():
+            if sys_id not in active_system_ids:
+                continue
             # Skip if the system is not in the config.
             system_name = f"system{sys_id}"
             material_key = f"pbd_material_{system_name}"
@@ -963,7 +1039,6 @@ class AnymalTerrainTask(RLTask):
                 if attr and attr.Get() is not None:
                     attr.Set(sample_val)
                     self._particle_cfg[system_name][param_name] = sample_val
-
             print(f"[INFO] Updated PBD material at {pbd_material_path} with randomized parameters.")
             
     def post_reset(self):
@@ -1021,11 +1096,17 @@ class AnymalTerrainTask(RLTask):
         self.compliance = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self.system_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device, requires_grad=False)
         self.terrain_types = torch.zeros(self.num_envs, dtype=torch.long, device=self.device, requires_grad=False)
+        self.env_grid = torch.zeros(self._num_envs, dtype=torch.long, device=self.device)
         self.bx_start = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.bx_end   = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.by_start = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.by_end   = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-
+        self.oob = torch.zeros(
+                    self.num_envs,
+                    dtype=torch.bool,
+                    device=self.device,
+                    requires_grad=False,
+                )
         env_ids = torch.arange(self._num_envs, dtype=torch.int64, device=self._device)
 
         self.num_dof = self._anymals.num_dof
@@ -1135,7 +1216,8 @@ class AnymalTerrainTask(RLTask):
         self.ep_length_history = torch.zeros((self.num_envs, self.tracking_history_len), device=self.device)
         self.ep_length_history_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.ep_length_history_full = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-
+        
+        self.total_episode_rewards = torch.zeros(self.num_envs, device=self.device)
         self.reset_idx(env_ids)
         self.init_done = True
 
@@ -1144,8 +1226,10 @@ class AnymalTerrainTask(RLTask):
         if len(env_ids) == 0:
             return
         indices = env_ids.to(dtype=torch.int32)
+        self.handle_logs(env_ids)
 
-        if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
+        if self.vel_curriculum:
+            self._update_command_distribution(env_ids) 
             self._resample_commands(env_ids)
         else:
             self.commands[env_ids, 0] = torch_rand_float(self.command_x_range[0], self.command_x_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
@@ -1155,13 +1239,15 @@ class AnymalTerrainTask(RLTask):
         # set small commands to zero
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
         
-        if self.curriculum:
-            self.update_terrain_level(env_ids)
+        self.update_terrain_level(env_ids)
+        self._assign_terrain_blocks(env_ids)        
+        self._randomize_dof_props(env_ids)
+        
+        self.handle_logs_2(env_ids)
 
         positions_offset = torch_rand_float(1, 1, (len(env_ids), self.num_dof), device=self.device)
         self.dof_pos[env_ids] = self.default_dof_pos[env_ids] * positions_offset
         self.dof_vel[env_ids] = 0
-        # self._randomize_dof_props(env_ids)
 
         self.base_pos[env_ids] = self.base_init_state[0:3]
         self.base_pos[env_ids, 0:3] += self.env_origins[env_ids]
@@ -1211,20 +1297,31 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_joint_positions(positions=self.dof_pos[env_ids].clone(), indices=indices)
         self._anymals.set_joint_velocities(velocities=self.dof_vel[env_ids].clone(), indices=indices)
 
+
+    def handle_logs(self, env_ids):
         # fill extras
         self.extras["episode"] = {}
+        self.extras["extras"] = {}
         for key in self.episode_sums.keys():
             self.extras["episode"]["rew_" + key] = (
                 torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
             )
+        
+        total_episode_reward = torch.zeros(self.num_envs, device=self.device)
+        for name in self.reward_scales.keys():
+            total_episode_reward += self.episode_sums[name]
 
         steps     = self.progress_buf[env_ids].clamp(min=1)            # number of physics steps
         durations = steps * self.dt                               # actual seconds elapsed
         # Get a per‐environment reward in X, instead of a single scalar
         lin_x_rewards = self.episode_sums["tracking_lin_vel"][env_ids] / durations  # shape == (len(env_ids),)
         ang_x_rewards = self.episode_sums["tracking_ang_vel"][env_ids] / durations  # shape == (len(env_ids),)
-        final_lengths = self.progress_buf[env_ids]  / self.max_episode_length     # Update history buffer for each environment
-
+        full_len = torch.ones_like(self.progress_buf[env_ids], dtype=torch.float)
+        final_lengths = torch.where(
+            self.timeout_buf[env_ids],
+            full_len,                                         # → 1.0 ·· when reset was a timeout / OOB
+            self.progress_buf[env_ids].float() / self.max_episode_length  # → fractional length otherwise
+        )
         # 1. current write positions for every env we’re resetting
         lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
         ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
@@ -1245,8 +1342,64 @@ class AnymalTerrainTask(RLTask):
         self.tracking_ang_vel_x_history_full[env_ids] |= (self.tracking_ang_vel_x_history_idx[env_ids] == 0)
         self.ep_length_history_full      [env_ids] |= (self.ep_length_history_idx      [env_ids] == 0)
 
+        self.extras["time_outs"] = self.timeout_buf
+        self.extras["extras"]["min_action"] = torch.min(self.actions)
+        self.extras["extras"]["max_action"] = torch.max(self.actions)
+        if self.oob is not None and self.oob.numel() > 0:
+            self.extras["extras"]["oob_ratio"] = float(self.oob.float().mean().item())
+
+    def handle_logs_2(self, env_ids): 
+        if self.curriculum:
+            self.extras["extras"]["current_terrain_level"] = torch.mean(self.terrain_levels.float())
+            self.extras["extras"]["unlocked_terrain_levels"] = torch.mean(self.unlocked_levels.float())
+            
+            unique_levels = torch.unique(self.terrain_levels)
+            for lvl in unique_levels:
+                cnt = int((self.terrain_levels == lvl).sum().item())
+                self.extras["extras"][f"num_robots_level_{int(lvl.item())}"] = cnt
+            
+            unique_types = torch.unique(self.terrain_types)
+            for t in unique_types:
+                cnt = int((self.terrain_types == t).sum().item())
+                self.extras["extras"][f"num_robots_type_{int(t.item())}"] = cnt
+                mask = (self.terrain_types == t)
+                if mask.any():
+                    avg = torch.mean(self.total_episode_rewards[mask])/ self.max_episode_length_s
+                    self.extras["extras"][f"avg_episode_reward_type_{int(t)}"] = avg  
+            for lvl, pts in self.current_particle_positions.items():
+                count = pts.shape[0]
+                self.extras["extras"][f"num_particles_level_{int(lvl.item())}"] = count
+
+        if self.vel_curriculum:
+            for cur, cat in zip(self.curricula, self.category_names):
+                self.extras["extras"][f"command_area_{cat}"] = np.sum(cur.weights) / cur.weights.shape[0]
+            
+            terrain_types = self.terrain_types
+            for t in torch.unique(terrain_types):
+                sub_envs = self.terrain_types == t
+                if sub_envs.numel() == 0:
+                    continue
+                cmds = self.commands[sub_envs]
+                max_x = cmds[:, 0].abs().max().item()
+                max_y = cmds[:, 1].abs().max().item()
+                max_yaw = cmds[:, 2].abs().max().item()
+
+                min_x = cmds[:, 0].min().item()
+                min_y = cmds[:, 1].min().item()
+                min_yaw = cmds[:, 2].min().item()
+
+                self.extras["extras"][f"terrain_{int(t.item())}/max_cmd_x_vel"]= max_x
+                self.extras["extras"][f"terrain_{int(t.item())}/max_cmd_y_vel"]= max_y
+                self.extras["extras"][f"terrain_{int(t.item())}/max_cmd_yaw_vel"]= max_yaw
+        
+                self.extras["episode"][f"terrain_{int(t.item())}/min_cmd_x_vel"]= min_x
+                self.extras["episode"][f"terrain_{int(t.item())}/min_cmd_y_vel"]= min_y
+                self.extras["episode"][f"terrain_{int(t.item())}/min_cmd_yaw_vel"]= min_yaw
+            
+        # reset the episode sums
         for key in self.episode_sums.keys():      
             self.episode_sums[key][env_ids] = 0.0
+        self.total_episode_rewards[:] = 0.0
 
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
@@ -1254,6 +1407,8 @@ class AnymalTerrainTask(RLTask):
         self.feet_air_time[env_ids] = 0.0
         self.reset_buf[env_ids] = 1
         self.obs_history_buf[env_ids, :, :] = 0. 
+        self.oob[env_ids] = False
+
         # only randomize once, on the very first-ever call to reset_idx:
         if self.randomize_episode_start and not self._start_randomized:
             # pick a random starting tick in [0, max_episode_length)
@@ -1265,39 +1420,6 @@ class AnymalTerrainTask(RLTask):
             # after that, always zero it
             self.progress_buf[env_ids] = 0  
 
-        self.extras["time_outs"] = self.timeout_buf
-        self.extras["episode"]["min_action"] = torch.min(self.actions)
-        self.extras["episode"]["max_action"] = torch.max(self.actions)
-
-        if self.curriculum:
-            self.extras["episode"]["current_terrain_level"] = torch.mean(self.terrain_levels.float())
-            self.extras["episode"]["unlocked_terrain_levels"] = torch.mean(self.unlocked_levels.float())
-            unique_levels = torch.unique(self.terrain_levels)
-            for lvl in unique_levels:
-                cnt = int((self.terrain_levels == lvl).sum().item())
-                self.extras["episode"][f"num_robots_level_{int(lvl.item())}"] = cnt
-            unique_types = torch.unique(self.terrain_types)
-            for t in unique_types:
-                cnt = int((self.terrain_types == t).sum().item())
-                self.extras["episode"][f"num_robots_type_{int(t.item())}"] = cnt
-
-        if self.vel_curriculum:
-            for cur, cat in zip(self.curricula, self.category_names):
-                self.extras["episode"][f"command_area_{cat}"] = np.sum(cur.weights) / cur.weights.shape[0]
-            
-            terrain_types = self.terrain_types[env_ids]
-            for t in torch.unique(terrain_types):
-                mask = terrain_types == t
-                cmds = self.commands[env_ids[mask]]
-                max_x = cmds[:, 0].abs().max().item()
-                max_y = cmds[:, 1].abs().max().item()
-                max_yaw = cmds[:, 2].abs().max().item()
-
-                self.extras["episode"][f"terrain_{int(t.item())}/max_cmd_x_vel"]= max_x
-                self.extras["episode"][f"terrain_{int(t.item())}/max_cmd_y_vel"]= max_y
-                self.extras["episode"][f"terrain_{int(t.item())}/max_cmd_yaw_vel"]= max_yaw
-
-
     def refresh_dof_state_tensors(self):
         self.dof_pos = self._anymals.get_joint_positions(clone=False)
         self.dof_vel = self._anymals.get_joint_velocities(clone=False)
@@ -1308,11 +1430,11 @@ class AnymalTerrainTask(RLTask):
         self.foot_pos, _ = self._anymals._foot.get_world_poses(clone=False)
 
     def refresh_net_contact_force_tensors(self):
-        # self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
+        self.foot_contact_forces = self.foot_contact_forces * 0.5 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
         self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
         self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
-        self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
 
     def pre_physics_step(self, actions):
         if not self.world.is_playing():
@@ -1350,12 +1472,15 @@ class AnymalTerrainTask(RLTask):
             self.refresh_net_contact_force_tensors()
 
             self.common_step_counter += 1
+            
             if self.push_enabled and (self.common_step_counter % self.push_interval) == 0:
                 self.push_robots()
             if  self.randomize_gravity and (self.common_step_counter % self.gravity_randomize_interval) == 0:
                 self._randomize_gravity()
             if self.randomize_pbd and (self.common_step_counter % self.randomize_pbd_interval == 0):
                 self.randomize_pbd_material()
+            if self.vel_curriculum and (self.common_step_counter % self.max_episode_length==0):
+                self._resample_commands(env_ids)
 
             # prepare quantities
             self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])
@@ -1365,11 +1490,13 @@ class AnymalTerrainTask(RLTask):
 
             if self.measure_heights:
                 if self._particles_active:
+                    self._update_particle_cache()
                     self.query_top_particle_positions(visualize=False) 
                 self.get_heights_below_foot()
 
             self.check_termination()
             self.compute_reward()
+            self.total_episode_rewards += self.rew_buf
 
             env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
             self.reset_idx(env_ids)
@@ -1394,16 +1521,19 @@ class AnymalTerrainTask(RLTask):
             hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale
             hf_y = (self.base_pos[:, 1] + self.terrain.border_size) / self.terrain.horizontal_scale
             # Check if the robot is outside the "safe" bounds with the buffer:
-            oob = (
+            self.oob = (
                 (hf_x < self.bx_start + self.oob_buffer) |
                 (hf_x > self.bx_end - self.oob_buffer)  |
                 (hf_y < self.by_start + self.oob_buffer) |
                 (hf_y > self.by_end - self.oob_buffer)
             )
-            self.progress_buf[oob] = self.max_episode_length + 1
-            
-        self.timeout_buf = self.progress_buf > self.max_episode_length # no terminal reward for time-outs
-        self.reset_buf |= self.timeout_buf
+
+        self.timeout_buf = (self.progress_buf > self.max_episode_length) | self.oob # no terminal reward for time-outs
+        self.body_height_buf = torch.mean(self.base_pos[:, 2].unsqueeze(1) - self.measured_heights, dim=1) \
+                                   < self._task_cfg["env"]["learn"]["terminalBodyHeight"]
+
+        self.reset_buf |= self.body_height_buf.clone
+        self.reset_buf |= self.timeout_buf.clone
         
 
     def _prepare_reward_function(self):
@@ -1456,7 +1586,7 @@ class AnymalTerrainTask(RLTask):
 
         # inactive rewards, prefixed
         for name in self.inactive_reward_names:
-            self.episode_sums[f"inactive_{name}"] = torch.zeros(
+            self.episode_sums[name] = torch.zeros(
                 self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
             )
 
@@ -1470,7 +1600,7 @@ class AnymalTerrainTask(RLTask):
         for name in self.inactive_reward_names:
             raw = getattr(self, f"_reward_{name}")()
             # e.g. store in extras or episode_sums:
-            self.episode_sums[f"inactive_{name}"] += raw * self.dt
+            self.episode_sums[name] += raw * self.dt
 
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
@@ -1546,15 +1676,21 @@ class AnymalTerrainTask(RLTask):
             priv_parts.append(force_components)
         
         # compliance (soft contacts)
-        if self.priv_compliance and self._compliance_active:
+        if self.priv_compliance:
             priv_parts += [
-                (self.stiffness - self.stiffness_shift) * self.stiffness_scale,
-                (self.damping - self.damping_shift) * self.damping_scale,
+            (self.stiffness - self.stiffness_shift) * self.stiffness_scale,
+            (self.damping - self.damping_shift) * self.damping_scale,
             ]
 
-        # PBD particle parameters
-        if self._particles_active and self.priv_pbd_particle:
-            priv_parts.append((self.pbd_parameters - self.pbd_shift) * self.pbd_scale)
+        if self.priv_pbd_particle:
+            if self._particles_active:
+                priv_parts.append(
+                    (self.pbd_parameters - self.pbd_shift) * self.pbd_scale
+                )
+            elif self.test:
+                pbd_dim = self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0
+                pbd_tensor = torch.zeros(self.num_envs, pbd_dim, device=self.device)
+                priv_parts.append(pbd_tensor)
 
         # finally concatenate all privileged parts (or an empty tensor if none)
         if priv_parts:
@@ -1656,7 +1792,7 @@ class AnymalTerrainTask(RLTask):
         )
         calf_contact = (torch.norm(self.calf_contact_forces, dim=-1) > 0.1)
         total_contact = thigh_contact + calf_contact
-        return torch.sum(thigh_contact, dim=-1)
+        return torch.sum(total_contact, dim=-1)
 
     def _reward_termination(self):
         # Terminal reward / penalty
@@ -1703,10 +1839,6 @@ class AnymalTerrainTask(RLTask):
         self.feet_air_time *= ~self.contact_filt
         return rew_airTime
     
-    def _reward_stumble(self):
-        # Penalize feet hitting vertical surfaces
-        return torch.any(torch.norm(self.foot_contact_forces[:, self.feet_indices, :2], dim=2) > 5 *torch.abs(self.foot_contact_forces[:, self.feet_indices, 2]), dim=1)
-        
     def _reward_stand_still(self):
         # Penalize motion at zero commands
         return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
@@ -1719,20 +1851,24 @@ class AnymalTerrainTask(RLTask):
         # Penalize hip motion
         return torch.sum(torch.abs(self.dof_pos[:, :4] - self.default_dof_pos[:, :4]), dim=1)
 
-
-    
-
-    
     #------------ end reward functions----------------
     
 
     #------------ particle based functions----------------
-    def create_particle_systems(self):
-        for i in range(self.terrain_details.shape[0]):
-            terrain_row = self.terrain_details[i]
-            if not int(terrain_row[5].item()):
-                continue  # Skip terrains without particles
+    def create_particle_systems(self, level):
 
+        if level in self._instantiated_particle_levels:
+            return
+        rows = self._particle_rows_by_level.get(level, ())
+        if not rows:
+            return
+        # 2) mark as done
+        self._instantiated_particle_levels.add(level)
+
+        for i in rows:
+            terrain_row = self.terrain_details[i]
+            row_idx, col_idx = int(terrain_row[2]), int(terrain_row[3])
+            grid_key = terrain_row[0]  # e.g. "grid_0_0"
             # Construct the system name from integer system_id
             system_id = int(terrain_row[7])                # e.g. 1, 2, ...
             system_name = f"system{system_id}"     # "system1", "system2", etc.            
@@ -1785,7 +1921,7 @@ class AnymalTerrainTask(RLTask):
                 self.created_materials[material_key] = True
 
             # **Create Particle Grid under the existing system**
-            self.create_particle_grid(i, terrain_row, system_name)
+            self.create_particle_grid(grid_key, terrain_row, system_name)
         print(f"[INFO] Created {len(self.created_materials)} PBD Materials.")
         print(f"[INFO] Created {self.total_particles} Particles.")
 
@@ -1839,8 +1975,7 @@ class AnymalTerrainTask(RLTask):
                     "BindMaterial", prim_path=Sdf.Path(f"/World/particleSystem/{system_name}"), material_path=material_path
                 )
 
-
-    def create_particle_grid(self, i, terrain_row, system_name):
+    def create_particle_grid(self, grid_key, terrain_row, system_name):
         # Define the particle system path
         particle_system_path = f"/World/particleSystem/{system_name}"    
 
@@ -1869,15 +2004,17 @@ class AnymalTerrainTask(RLTask):
 
         if fluid:
             fluid_rest_offset = 0.99 * 0.6 * system_cfg.get("particle_system_particle_contact_offset", None)
-            particle_spacing = particle_spacing_factor * fluid_rest_offset
+            radius = fluid_rest_offset
+            particle_spacing = particle_spacing_factor * radius
         else:
-            particle_spacing = particle_spacing_factor * solid_rest_offset
+            radius = solid_rest_offset
+            particle_spacing = particle_spacing_factor * radius
 
         num_samples_x = int(size / particle_spacing) + 1
         num_samples_y = int(size / particle_spacing) + 1
         num_samples_z = int(depth / particle_spacing) + 1
 
-        jitter_factor = system_cfg["particle_grid_jitter_factor"] * particle_spacing
+        jitter_factor = system_cfg["particle_grid_jitter_factor"] * (particle_spacing - 2 * radius) * 0.5
 
         positions = []
         velocities = []
@@ -1906,9 +2043,9 @@ class AnymalTerrainTask(RLTask):
             y = lower[1]
             x += particle_spacing
 
+
         # Define particle point instancer path (now grouped by level)
-        particle_point_instancer_path = f"/World/particleSystem/{system_name}/level_{level}/particleInstancer"
-        self.particle_instancers_by_level.setdefault(level, [])
+        particle_point_instancer_path = f"/World/particleSystem/{system_name}/level_{level}/grid_{grid_key}/particleInstancer"
 
         # Check if the PointInstancer already exists to prevent duplication
         if not self._stage.GetPrimAtPath(particle_point_instancer_path).IsValid():
@@ -1921,14 +2058,14 @@ class AnymalTerrainTask(RLTask):
                 Sdf.Path(particle_system_path),
                 self._particle_cfg[system_name]["particle_grid_self_collision"],
                 self._particle_cfg[system_name]["particle_grid_fluid"],
-                self._particle_cfg[system_name]["particle_grid_particle_group"],
+                grid_key,
                 self._particle_cfg[system_name]["particle_grid_particle_mass"],
                 self._particle_cfg[system_name]["particle_grid_density"],
                 num_prototypes=1,  # Adjust if needed
                 prototype_indices=None  # Adjust if needed
             )
             print(f"[INFO] Created Particle Grid at {particle_point_instancer_path}")
-            self.particle_instancers_by_level[level].append(particle_point_instancer_path)
+            self.particle_instancers_by_level[level][system_name][grid_key] = particle_point_instancer_path
         
             # Configure particle prototype
             particle_prototype_sphere = UsdGeom.Sphere.Get(
@@ -1940,85 +2077,111 @@ class AnymalTerrainTask(RLTask):
                 radius = solid_rest_offset
             particle_prototype_sphere.CreateRadiusAttr().Set(radius)
             # Increase counters, etc.
-            self.total_particles += len(positions)
-            print(f"[INFO] Created {len(positions)} Particles at {particle_point_instancer_path}")
+            count = len(positions)
+            self.total_particles += count
+            key = (level, system_name, grid_key)
+            self.initial_particle_positions[key] = Vt.Vec3fArray(positions)
+            self.particle_counts[key] = count
+            print(f"[INFO] Created {count} Particles at {particle_point_instancer_path}")
         else:
-            point_instancer = UsdGeom.PointInstancer.Get(self._stage, particle_point_instancer_path)            
-            
-            existing_positions = point_instancer.GetPositionsAttr().Get()
-            existing_velocities = point_instancer.GetVelocitiesAttr().Get()
+            print(f"[INFO] Particle Point Instancer already exists at {particle_point_instancer_path}")
 
-            # Convert Python lists -> Vt.Vec3fArray (new data)
-            new_positions = Vt.Vec3fArray(positions)
-            new_velocities = Vt.Vec3fArray(velocities)
+    def _update_particle_cache(self): 
+        if not self.particle_instancers_by_level:
+            return
+        self.current_particle_positions.clear()
 
-            appended_positions = Vt.Vec3fArray(list(existing_positions) + list(new_positions))
-            appended_velocities = Vt.Vec3fArray(list(existing_velocities) + list(new_velocities))
+        for lvl, system_dict in self.particle_instancers_by_level.items():
+            positions = []  # accumulate positions from all instancers of this system
+            for system_name, grids in system_dict.items():
+                for grid_key, inst_path in grids.items():
+                    prim = self._stage.GetPrimAtPath(inst_path)
+                    if not prim.IsValid():
+                        continue
+                    inst = UsdGeom.PointInstancer(prim)
+                    vt_arr = inst.GetPositionsAttr().Get() or Vt.Vec3fArray()
+                    if len(vt_arr) == 0:
+                        continue
+                    pts = torch.tensor(vt_arr, dtype=torch.float32, device=self.device)
+                    
+                    # --- auto‑reset on excessive particle loss -----------------
+                    key = (lvl, system_name, grid_key)
+                    init_cnt = self.particle_counts.get(key)
+                    lx0, lx1, ly0, ly1 = self.bounds.get(int(grid_key))
+                    lz0 = -2
+                    lz1 = 2
+                    inside = (pts[:,0] >= lx0) & (pts[:,0] < lx1) & (pts[:,1] >= ly0) & (pts[:,1] < ly1) & (pts[:, 2] >= lz0) & (pts[:, 2] < lz1)
+                    filtered = pts[inside]
+                    valid_count = filtered.shape[0]
+                    needs_reset = self._particle_cfg["reset_check"] and init_cnt is not None and valid_count < self._particle_cfg["particle_reset_threshold"] * init_cnt
+                    if needs_reset:
+                        carb.log_warn(
+                            f"[PBD]Resetting {system_name}@level{lvl}: "
+                            f"{len(positions)}/{init_cnt} particles remain (<80%)."
+                        )
+                        self._reset_particle_grid(lvl, system_name, grid_key)
+                        init_pos = self.initial_particle_positions[(lvl, system_name, grid_key)]
+                        pts      = torch.tensor(init_pos, dtype=torch.float32, device=self.device)
+                    positions.append(filtered)
+            self.current_particle_positions[lvl] = (
+            torch.cat(positions, dim=0)
+            if positions
+            else torch.empty((0, 3), dtype=torch.float32, device=self.device)
+        )
 
-            # Re-set the attributes on the same instancer
-            point_instancer.GetPositionsAttr().Set(appended_positions)
-            point_instancer.GetVelocitiesAttr().Set(appended_velocities)
+    def _reset_particle_grid(self, level: int, system_name: str, grid_key) -> None:
+        key = (level, system_name, grid_key)
+        if key not in self.initial_particle_positions:
+            return  # Nothing to restore (should never happen)
 
-            # Also update the prototype indices if necessary.
-            existing_proto = list(point_instancer.GetProtoIndicesAttr().Get() or [])
-            new_proto = [0] * len(new_positions)
-            point_instancer.GetProtoIndicesAttr().Set(existing_proto + new_proto)
+        instancer_path = self.particle_instancers_by_level.get(level, {}).get(system_name, []).get(grid_key)
+        instancer_prim = self._stage.GetPrimAtPath(instancer_path)
+        if not instancer_prim.IsValid():
+            return  # Grid was removed externally
 
-            # IMPORTANT: Reconfigure the particle set so that the simulation recalculates
-            # properties such as mass based on the updated number of particles.
-            particleUtils.configure_particle_set(
-                point_instancer.GetPrim(),
-                particle_system_path,
-                self._particle_cfg[system_name]["particle_grid_self_collision"],
-                self._particle_cfg[system_name]["particle_grid_fluid"],
-                self._particle_cfg[system_name]["particle_grid_particle_group"],
-                self._particle_cfg[system_name]["particle_grid_particle_mass"] * len(appended_positions),  # update mass based on total count
-                self._particle_cfg[system_name]["particle_grid_density"],
-            )
-            print(f"[INFO] Appended {len(new_positions)} Particles to {particle_point_instancer_path}")
-            # Increment the total_particles counter
-            self.total_particles += len(new_positions)
+        # 1⃣  Write positions/velocities back to USD
+        init_positions = self.initial_particle_positions[key]
+        zero_vel = Gf.Vec3f(0.0)
+        UsdGeom.PointInstancer(instancer_prim).GetPositionsAttr().Set(
+            Vt.Vec3fArray(init_positions)
+        )
+        UsdGeom.PointInstancer(instancer_prim).GetVelocitiesAttr().Set(
+            Vt.Vec3fArray([zero_vel] * len(init_positions))
+        )
+
+        # 2  Let PhysX recompute mass etc.
+        particleUtils.configure_particle_set(
+            instancer_prim,
+            f"/World/particleSystem/{system_name}",
+            self._particle_cfg_original[system_name]["particle_grid_self_collision"],
+            self._particle_cfg_original[system_name]["particle_grid_fluid"],
+            grid_key,
+            self._particle_cfg_original[system_name]["particle_grid_particle_mass"]
+            * len(init_positions),
+            self._particle_cfg_original[system_name]["particle_grid_density"],
+        )
+
+        # 3  Reset the envs in resetted grid
+        env_ids = (self.env_grid == grid_key).nonzero(as_tuple=False).flatten()
+        if env_ids.numel():
+            self.reset_idx(env_ids)
 
     def query_top_particle_positions(self, visualize=False):
-        """
-        Query all particle positions from the given level and, using the depression indices
-        for that level, find for each grid cell the
-        top (maximum z) particle position.
-
-        Returns:
-            A dictionary mapping cell indices (i, j) to a tuple:
-            (cell_center_x, cell_center_y, top_z)
-            Only cells where at least one particle was found are included.
-        """
-        if not self.particle_instancers_by_level:
+        if not self.current_particle_positions:
             print("No particle instancers registered yet; skipping top particle query.")
             return
-        stage = self._stage
-        # Determine which levels to process: either the given level or all levels present
-        levels_to_process = list(self.particle_instancers_by_level.keys())
+
         positions = []
         proto_indices = []
         # Iterate each level and its systems
-        for lvl in levels_to_process:
+        
+        for lvl, particles in self.current_particle_positions.items():
+            if particles.size == 0:
+                continue
+            
             env_ids = (self.terrain_levels == lvl).nonzero(as_tuple=False).flatten()
             if env_ids.numel() == 0:
-                # No environments at this level, skip
-                continue
-            # gather all particle positions for this level
-            all_positions = []
-            for inst_path in self.particle_instancers_by_level[lvl]:
-                prim = stage.GetPrimAtPath(inst_path)
-                if not prim.IsValid():
-                    continue
-                position = UsdGeom.PointInstancer(prim).GetPositionsAttr().Get() or Vt.Vec3fArray()
-                if position:
-                    all_positions.append(np.array(position))
-
-            if not all_positions:
-                continue
-
-            particle_positions_np = np.vstack(all_positions)
-
+                continue  # no robots on this level this frame
 
             foot_positions = self.foot_pos.view(self.num_envs, 4, 3)  
             if env_ids is not None:
@@ -2037,19 +2200,19 @@ class AnymalTerrainTask(RLTask):
             # Prepare cell boundaries in vectorized form
             cell_scale = self.terrain.horizontal_scale
             border_size = self.terrain.border_size
+            half_cell_scale = cell_scale / 2.0
 
             cell_x = unique_grid_indices[:, 0] * cell_scale - border_size
             cell_y = unique_grid_indices[:, 1] * cell_scale - border_size
-            half_scale = cell_scale / 2
 
-            cell_x_min = cell_x - half_scale
-            cell_x_max = cell_x + half_scale
-            cell_y_min = cell_y - half_scale
-            cell_y_max = cell_y + half_scale
+            cell_x_min = cell_x - half_cell_scale
+            cell_x_max = cell_x + half_cell_scale
+            cell_y_min = cell_y - half_cell_scale
+            cell_y_max = cell_y + half_cell_scale
 
             # Vectorized mask computation
-            particle_x = particle_positions_np[:, 0][:, None]
-            particle_y = particle_positions_np[:, 1][:, None]
+            particle_x = particles[:, 0].unsqueeze(1)
+            particle_y = particles[:, 1].unsqueeze(1)
 
             mask = (
                 (particle_x >= cell_x_min) &
@@ -2062,58 +2225,46 @@ class AnymalTerrainTask(RLTask):
             for idx, (i, j) in enumerate(unique_grid_indices):
                 particle_mask = mask[:, idx]
                 if particle_mask.any():
-                    top_z = np.min([particle_positions_np[particle_mask, 2].max(), 0])
-                    self.height_samples[i, j] = int(round(top_z / self.terrain.vertical_scale))
+                    max_z = particles[particle_mask, 2].max()
+                    top_z = torch.minimum(max_z, torch.tensor(0.0, device=max_z.device))
+                    self.height_samples[i, j] = int(round((top_z / self.terrain.vertical_scale).item()))
 
                 if visualize:
-                    positions.append(Gf.Vec3f(cell_x[idx], cell_y[idx], float(self.height_samples[i, j])))
+                    positions.append(Gf.Vec3f(cell_x[idx].item(), cell_y[idx].item(), float(self.height_samples[i, j])))
                     proto_indices.append(0)
 
         if visualize:
+            if not hasattr(self, "particle_height_point_instancer"):
+                self._init_particle_height_instancer()
             positions_array = Vt.Vec3fArray(positions)
             proto_indices_array = Vt.IntArray(proto_indices)
-
-            # 1) Create a dedicated Scope for debugging these indices
-            debug_scope_path = "/World/DebugDepressionIndices"
-            if not stage.GetPrimAtPath(debug_scope_path).IsValid():
-                omni.kit.commands.execute(
-                    "CreatePrim",
-                    prim_type="Scope",
-                    prim_path=debug_scope_path,
-                    attributes={}
-                )
-
-            # 2) Create a PointInstancer for all depression indices
-            instancer_path = f"{debug_scope_path}/DepressionIndicesPointInstancer"
-            if not stage.GetPrimAtPath(instancer_path).IsValid():
-                omni.kit.commands.execute(
-                    "CreatePrim",
-                    prim_type="PointInstancer",
-                    prim_path=instancer_path,
-                    attributes={}
-                )
-            point_instancer = UsdGeom.PointInstancer(stage.GetPrimAtPath(instancer_path))
-
-            # 3) Make sure there's a prototype sphere
-            sphere_proto_path = f"{instancer_path}/DepressionIndexSphere"
-            if not stage.GetPrimAtPath(sphere_proto_path).IsValid():
-                omni.kit.commands.execute(
-                    "CreatePrim",
-                    prim_type="Sphere",
-                    prim_path=sphere_proto_path,
-                    attributes={"radius": 0.02},  # adjust size as desired
-                )
-            # Ensure the instancer references the prototype
-            if len(point_instancer.GetPrototypesRel().GetTargets()) == 0:
-                point_instancer.GetPrototypesRel().AddTarget(sphere_proto_path)
-
             # 5) Assign to the PointInstancer
-            point_instancer.CreatePositionsAttr().Set(positions_array)
-            point_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)
+            self.particle_height_point_instancer.CreatePositionsAttr().Set(positions_array)
+            self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)        
 
-            # (Optional) Color the debug spheres differently
-            sphere_geom = UsdGeom.Sphere(stage.GetPrimAtPath(sphere_proto_path))
-            sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(0.0, 1.0, 0.0)])  # green for clarity
+    def _visualize_height_scans(self):
+        # lazy init
+        if not hasattr(self, "_height_scan_instancer"):
+            self._init_height_scan_instancer()
+
+        px      = self.height_px.flatten()
+        py      = self.height_py.flatten()
+        pz = self.measured_heights.flatten()
+        # compute world coords in bulk
+        hscale = self.terrain.horizontal_scale
+        bsize  = self.terrain.border_size
+        xs = px * hscale - bsize
+        ys = py * hscale - bsize
+        # build one Vec3fArray
+        vecs = [Gf.Vec3f(float(x), float(y), float(z))
+           for x, y, z in zip(xs, ys, pz)]
+        positions_array = Vt.Vec3fArray(vecs)
+        # proto indices all zero
+        proto_indices_array = Vt.IntArray([0] * len(vecs))
+
+        # 5) Update the PointInstancer with the positions and prototype indices
+        self._height_scan_instancer.CreatePositionsAttr().Set(positions_array)
+        self._height_scan_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)
 
 
     def _init_height_scan_instancer(self):
@@ -2164,48 +2315,191 @@ class AnymalTerrainTask(RLTask):
         # 6) Set a debug color on the prototype sphere
         sphere_geom = UsdGeom.Sphere(self._stage.GetPrimAtPath(prototype_path))
         sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(1.0, 0.0, 0.0)])
+
+    def _init_particle_height_instancer(self):
+        stage = self._stage
+        # 1) Create a dedicated Scope for debugging these indices
+        debug_scope_path = "/World/DebugDepressionIndices"
+        if not stage.GetPrimAtPath(debug_scope_path).IsValid():
+            omni.kit.commands.execute(
+                "CreatePrim",
+                prim_type="Scope",
+                prim_path=debug_scope_path,
+                attributes={}
+            )
+
+        # 2) Create a PointInstancer for all depression indices
+        instancer_path = f"{debug_scope_path}/DepressionIndicesPointInstancer"
+        if not stage.GetPrimAtPath(instancer_path).IsValid():
+            omni.kit.commands.execute(
+                "CreatePrim",
+                prim_type="PointInstancer",
+                prim_path=instancer_path,
+                attributes={}
+            )
+        self.particle_height_point_instancer = UsdGeom.PointInstancer(stage.GetPrimAtPath(instancer_path))
+
+        # 3) Make sure there's a prototype sphere
+        sphere_proto_path = f"{instancer_path}/DepressionIndexSphere"
+        if not stage.GetPrimAtPath(sphere_proto_path).IsValid():
+            omni.kit.commands.execute(
+                "CreatePrim",
+                prim_type="Sphere",
+                prim_path=sphere_proto_path,
+                attributes={"radius": 0.02},  # adjust size as desired
+            )
+        # Ensure the instancer references the prototype
+        if len(self.particle_height_point_instancer.GetPrototypesRel().GetTargets()) == 0:
+            self.particle_height_point_instancer.GetPrototypesRel().AddTarget(sphere_proto_path)
+    
+        sphere_geom = UsdGeom.Sphere(stage.GetPrimAtPath(sphere_proto_path))
+        sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(0.0, 1.0, 0.0)])  # green for clarity
+
+    def _add_depression_colliders(self, thickness: float = 0.05):
+        """
+        Create an invisible PhysX box around every terrain patch whose
+        `name` == "central_depression_terrain".  Call once after the stage
+        exists (i.e. from `get_terrain()` or `set_up_scene()`).
+
+        Args:
+            thickness: wall thickness in metres.
+        """
+        for (idx, level, row, col, terrain_type,
+            particles, compliant, system,
+            depth, size,
+            lx0, lx1, ly0, ly1, fluid) in self.terrain_details:
+
+            if size <= 0.0 or depth <= 0.0:          # only depressions have +size & +depth
+                continue
+
+            centre_xyz = self.env_origins[row, col]
+            centre = Gf.Vec3f(float(centre_xyz[0]),
+                          float(centre_xyz[2]),          # env_origins[..., 2] is height
+                          float(centre_xyz[1]))
+            
+            side_margin = 0.5
+            side = float(size) + side_margin  
+            wall_margin = 2.0         
+            height   = abs(float(depth)) + wall_margin                
+
+            path = Sdf.Path(
+                f"/World/depressionColliders/dep_{row}_{col}"
+            )
+            self.create_particle_box_collider(
+                path          = path,
+                side_length   = side,
+                height        = height,
+                translate     = centre,
+                thickness     = thickness,
+            )
+
+    def create_particle_box_collider(
+        self,
+        path: Sdf.Path,
+        side_length,
+        height,
+        translate: Gf.Vec3f = Gf.Vec3f(0, 0, 0),
+        thickness: float = 10.0,
+    ):
+        """
+        Creates an invisible collider box to catch particles. Opening is in y-up
+
+        Args:
+            path:           box path (xform with cube collider children that make up box)
+            side_length:    inner side length of box
+            height:         height of box
+            translate:      location of box, w.r.t it's bottom center
+            thickness:      thickness of the box walls
+        """
+        xform = UsdGeom.Xform.Define(self._stage, path)
+        # xform.MakeInvisible()
+        xform_path = xform.GetPath()
+        physicsUtils.set_or_add_translate_op(xform, translate=translate)
+        cube_width = side_length + 2.0 * thickness
+        offset = side_length * 0.5 + thickness * 0.5
+        # front and back (+/- x)
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("front"))
+        cube.CreateSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, height * 0.5, offset))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, height, thickness))
+
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("back"))
+        cube.CreateSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, height * 0.5, -offset))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, height, thickness))
+
+        # left and right:
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("left"))
+        cube.CreateSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(-offset, height * 0.5, 0))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, height, cube_width))
+
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("right"))
+        cube.CreateSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(offset, height * 0.5, 0))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, height, cube_width))
+
+        # bottom
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("bottom"))
+        cube.CreateSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        # half‐thickness up from the base
+        physicsUtils.set_or_add_translate_op(
+            cube,
+            Gf.Vec3f(0, thickness * 0.5, 0)
+        )
+        # full width/depth, thin height
+        physicsUtils.set_or_add_scale_op(
+            cube,
+            Gf.Vec3f(cube_width, thickness, cube_width)
+        )
+
+        # top
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("top"))
+        cube.CreateSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        # just below the lid
+        physicsUtils.set_or_add_translate_op(
+            cube,
+            Gf.Vec3f(0, height - thickness * 0.5, 0)
+        )
+        physicsUtils.set_or_add_scale_op(
+            cube,
+            Gf.Vec3f(cube_width, thickness, cube_width)
+        )
+
+        xform_path_str = str(xform_path)
+
+        paths = [
+            xform_path_str + "/front",
+            xform_path_str + "/back",
+            xform_path_str + "/left",
+            xform_path_str + "/right",
+            xform_path_str + "/bottom",
+            xform_path_str + "/top",
+        ]
+        glassPath = "/World/Looks/OmniGlass"
+        if not self._stage.GetPrimAtPath(glassPath):
+            mtl_created = []
+            omni.kit.commands.execute(
+                "CreateAndBindMdlMaterialFromLibrary",
+                mdl_name="OmniGlass.mdl",
+                mtl_name="OmniGlass",
+                mtl_created_list=mtl_created,
+                select_new_prim=False,
+            )
+            glassPath = mtl_created[0]
         
-    def _visualize_height_scans(self):
-        # lazy init
-        if not hasattr(self, "_height_scan_instancer"):
-            self._init_height_scan_instancer()
-
-        px      = self.height_px.flatten()
-        py      = self.height_py.flatten()
-        pz = self.measured_heights.flatten()
-        # compute world coords in bulk
-        hscale = self.terrain.horizontal_scale
-        bsize  = self.terrain.border_size
-        xs = px * hscale - bsize
-        ys = py * hscale - bsize
-        # build one Vec3fArray
-        vecs = [Gf.Vec3f(float(x), float(y), float(z))
-           for x, y, z in zip(xs, ys, pz)]
-        positions_array = Vt.Vec3fArray(vecs)
-        # proto indices all zero
-        proto_indices_array = Vt.IntArray([0] * len(vecs))
-
-        # 5) Update the PointInstancer with the positions and prototype indices
-        self._height_scan_instancer.CreatePositionsAttr().Set(positions_array)
-        self._height_scan_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)
-
-
+        for path in paths:
+            omni.kit.commands.execute(
+                "BindMaterial", prim_path=path, material_path=glassPath
+            )
 
 #------------ helper functions----------------
-
-@torch.jit.script
-def quat_apply_yaw(quat, vec):
-    quat_yaw = quat.clone().view(-1, 4)
-    quat_yaw[:, 1:3] = 0.0
-    quat_yaw = normalize(quat_yaw)
-    return quat_apply(quat_yaw, vec)
-
-
-@torch.jit.script
-def wrap_to_pi(angles):
-    angles %= 2 * np.pi
-    angles -= 2 * np.pi * (angles > np.pi)
-    return angles
 
 @torch.jit.script
 def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:

@@ -5,7 +5,6 @@ import asyncio
 from abc import abstractmethod
 
 import numpy as np
-import omni.isaac.core.utils.warp.tensor as wp_utils
 import omni.kit
 import omni.usd
 import torch

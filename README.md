@@ -255,7 +255,6 @@ Common arguments for the training scripts are:
 * `enable_livestream=ENABLE_LIVESTREAM` - Whether to enable Omniverse streaming.
 * `experiment=EXPERIMENT` - Sets the name of the experiment.
 * `max_iterations=MAX_ITERATIONS` - Sets how many iterations to run for. Reasonable defaults are provided for the provided environments.
-* `warp=WARP` - If set to True, launch the task implemented with Warp backend (Note: not all tasks have a Warp implementation).
 * `kit_app=KIT_APP` - Specifies the absolute path to the kit app file to be used.
 * `enable_recording=ENABLE_RECORDING` - Enables viewport recording while running a task
 * `recording_interval=RECORDING_INTERVAL` - Number of RL steps in between recording sequences. By default, recordings happen every 2000 RL steps.

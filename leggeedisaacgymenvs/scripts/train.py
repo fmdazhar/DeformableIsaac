@@ -14,7 +14,7 @@ from leggeedisaacgymenvs.utils.task_util import initialize_task
 from rsl_rl.runners import OnPolicyRunner
 
 
-class RLGTrainer:
+class Trainer:
     def __init__(self, cfg, cfg_dict):
         self.cfg = cfg
         self.cfg_dict = cfg_dict
@@ -24,8 +24,8 @@ class RLGTrainer:
         self.cfg_dict["task"]["test"] = self.cfg.test
         self.rlg_config_dict = omegaconf_to_dict(self.cfg.train)
 
-    def run(self, env, module_path, experiment_dir):
-        log_dir = os.path.join(module_path, "runs")
+    def run(self, env, experiment_dir):
+        log_dir = experiment_dir
         os.makedirs(log_dir, exist_ok=True)
         device = self.cfg.rl_device
 
@@ -43,7 +43,6 @@ class RLGTrainer:
                 group=self.cfg.wandb_group,
                 entity=self.cfg.wandb_entity,
                 config=self.cfg_dict,
-                # sync_tensorboard=True,
                 id=run_name,
                 resume="allow",
                 monitor_gym=True,
@@ -81,12 +80,6 @@ class RLGTrainer:
                 if env.world.is_playing():
                     if first_frame:
                         env.reset()
-                        # env.simulation_app.update()
-                        # env.world.reset()
-                        # env.world.reset()
-                        # env.simulation_app.update()
-                        # env.world.reset()
-                        # env.simulation_app.update()
                         first_frame = False
                     else:
                         if step_counter >= max_steps:
@@ -100,29 +93,47 @@ class RLGTrainer:
 
                         env.step(actions.detach())
                         if self.cfg.wandb_activate:
-                            # Assuming the task (e.g. AnymalTerrainTask) is available as env.task
-                            mean_episode_sums = {}
-                            for key, tensor in env._task.episode_sums.items():
-                                # Compute the mean value across all environments
-                                mean_episode_sums[f"test/episode_sum_{key}"] = float(tensor.mean().item())
-                            # Optionally, log additional test metrics here.
-                            wandb.log(mean_episode_sums, step=step_counter)
-                            
-                            # foot_forces = env._task.foot_contact_forces.detach().cpu()    # Nx4x3
-                            # foot0 = foot_forces[0]
-                            # foot0_norms = torch.norm(foot0, dim=1)       # Nx4
-                            # force_log = {}
-                            # feet = ["FL", "FR", "RL", "RR"]
-                            # for i, foot_name in enumerate(feet):
-                            #     # log each component
-                            #     fx, fy, fz = foot0[i].tolist()
-                            #     force_log[f"test/foot0_{foot_name}_fx"] = fx
-                            #     force_log[f"test/foot0_{foot_name}_fy"] = fy
-                            #     force_log[f"test/foot0_{foot_name}_fz"] = fz
-                            #     # log the norm
-                            #     force_log[f"test/foot0_{foot_name}_norm"] = foot0_norms[i].item()
-                            # wandb.log(force_log, step=step_counter)
+                            log_data = {
+                                f"test/episode_sum_{k}": v.mean().item()
+                                for k, v in env._task.episode_sums.items()
+                            }
 
+                            lin_err = (env._task.base_lin_vel[:, 0] - env._task.commands[:, 0]).cpu()
+                            ang_err = (env._task.base_ang_vel[:, 2] - env._task.commands[:, 2]).cpu()
+                            log_data["test/lin_vel_x_rmsd"]  = torch.sqrt((lin_err ** 2).mean()).item()
+                            log_data["test/ang_vel_rmsd"]  = torch.sqrt((ang_err ** 2).mean()).item()
+                            log_data["test/mean_base_height"] = torch.mean(env._task.root_states[:, 2].unsqueeze(1) - env._task.measured_heights, dim=1).cpu()
+                            power_consumption = torch.sum(torch.multiply(env._task.torques, env._task.dof_vel), dim=1).cpu()
+                            log_data["test/mean_power_consumption"] = power_consumption.mean().item()
+                            max_torque, max_torque_indices = torch.max(torch.abs(env._task.torques), dim=1)
+                            log_data["test/mean_max_torque"] = max_torque.cpu()
+
+                            m = (env._task.total_masses + env._task.payloads).cpu()
+                            g = 9.8  # m/s^2
+                            v = torch.norm(env._task.base_lin_vel[:, 0:2], dim=1).cpu()
+                            cot = power_consumption / (m * g * v.clamp(min=1e-3))
+                            log_data["test/mean_cot"] = cot.mean().item()
+
+                            h = 0.28 #m
+                            froude_number =  env._task.base_lin_vel[:, 0].cpu() ** 2 / (g * h)
+                            log_data["test/mean_froude_number"] = froude_number.mean().item()
+
+                            # Log the foot contact forces
+                            foot_forces = env._task.foot_contact_forces.detach().cpu()    # Nx4x3
+                            foot0 = foot_forces[0]
+                            foot0_norms = torch.norm(foot0, dim=1)       # Nx4
+                            foot_norm = torch.norm(foot_forces, dim=2).mean(dim=0)
+                            feet = ["FL", "FR", "RL", "RR"]
+                            for i, foot_name in enumerate(feet):
+                                # log each component
+                                fx, fy, fz = foot0[i].tolist()
+                                log_data[f"test/foot0_{foot_name}_fx"] = fx
+                                log_data[f"test/foot0_{foot_name}_fy"] = fy
+                                log_data[f"test/foot0_{foot_name}_fz"] = fz
+                                log_data[f"test/foot0_{foot_name}_norm"] = foot0_norms[i].item()
+                                log_data[f"test/mean_{foot_name}_norm"] = foot_norm[i].item()
+
+                            wandb.log(log_data, step=step_counter)
                         step_counter += 1
 
                 else:
@@ -226,7 +237,7 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.randomizationRanges.randomizeMotorOffset = False
         cfg.task.env.randomizationRanges.randomizeKpFactor = False
         cfg.task.env.randomizationRanges.randomizeKdFactor = False
-        # cfg.task.env.randomizationRanges.material_randomization.enabled = False  
+        cfg.task.env.randomizationRanges.material_randomization.enabled = False  
         # Add any other overrides you need.
 
 
@@ -242,9 +253,9 @@ def parse_hydra_configs(cfg: DictConfig):
     task = initialize_task(cfg_dict, env)
 
     torch.cuda.set_device(local_rank)
-    rlg_trainer = RLGTrainer(cfg, cfg_dict)
+    rlg_trainer = Trainer(cfg, cfg_dict)
     rlg_trainer.launch_rlg_hydra()
-    rlg_trainer.run(env, module_path, experiment_dir)
+    rlg_trainer.run(env, experiment_dir)
     env.close()
 
     if cfg.wandb_activate and global_rank == 0:

@@ -1,4 +1,60 @@
-    # def update_command_curriculum(self, env_ids):
+else:
+            point_instancer = UsdGeom.PointInstancer.Get(self._stage, particle_point_instancer_path)            
+            
+            existing_positions = point_instancer.GetPositionsAttr().Get()
+            existing_velocities = point_instancer.GetVelocitiesAttr().Get()
+
+            # Convert Python lists -> Vt.Vec3fArray (new data)
+            new_positions = Vt.Vec3fArray(positions)
+            new_velocities = Vt.Vec3fArray(velocities)
+
+            appended_positions = Vt.Vec3fArray(list(existing_positions) + list(new_positions))
+            appended_velocities = Vt.Vec3fArray(list(existing_velocities) + list(new_velocities))
+
+            # Re-set the attributes on the same instancer
+            point_instancer.GetPositionsAttr().Set(appended_positions)
+            point_instancer.GetVelocitiesAttr().Set(appended_velocities)
+
+            # Also update the prototype indices if necessary.
+            existing_proto = list(point_instancer.GetProtoIndicesAttr().Get() or [])
+            new_proto = [0] * len(new_positions)
+            point_instancer.GetProtoIndicesAttr().Set(existing_proto + new_proto)
+
+            # IMPORTANT: Reconfigure the particle set so that the simulation recalculates
+            # properties such as mass based on the updated number of particles.
+            particleUtils.configure_particle_set(
+                point_instancer.GetPrim(),
+                particle_system_path,
+                self._particle_cfg[system_name]["particle_grid_self_collision"],
+                self._particle_cfg[system_name]["particle_grid_fluid"],
+                self._particle_cfg[system_name]["particle_grid_particle_group"],
+                self._particle_cfg[system_name]["particle_grid_particle_mass"] * len(appended_positions),  # update mass based on total count
+                self._particle_cfg[system_name]["particle_grid_density"],
+            )
+            print(f"[INFO] Appended {len(new_positions)} Particles to {particle_point_instancer_path}")
+            key = (level, system_name)
+            self.initial_particle_positions[key] = Vt.Vec3fArray(appended_positions)
+            self.particle_counts[key] = len(appended_positions)
+            self.current_particle_positions[key] = Vt.Vec3fArray(appended_positions)
+            # Increment the total_particles counter
+            self.total_particles += len(new_positions)    
+
+
+
+
+# Aggregate cached particle positions for this level
+all_pos = []
+for system_name in system_dict.keys():
+    key = (lvl, system_name)
+    cached = self.current_particle_positions.get(key)
+    if cached:
+        all_pos.append(np.array([[p.x, p.y, p.z] for p in cached]))
+
+if not all_pos:
+    continue
+
+
+# def update_command_curriculum(self, env_ids):
     #     """ Implements a curriculum of increasing commands
 
     #     Args:
@@ -684,4 +740,112 @@ from omni.isaac.core.prims import XFormPrim - - from isaacsim.core.prims import 
             min_x, max_x = self.command_ranges_by_terrain[row, 0:2]
 
             self.commands[these_envs, 0] = torch.rand(
-                len(these_envs), device=self.device, dtype=torch.float) * (max_x - min_x) + min_x
+                len(these_envs), device=self.device, dtype=torch.float) * (max_x - min_x) + min_x    
+            
+            
+            def update_terrain_level(self, env_ids):
+
+        if not self.init_done or not self.curriculum or self.test:
+            # do not change on initial reset
+            return
+
+        tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
+        tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
+        tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
+        
+        full_hist  = self.tracking_lin_vel_x_history_full 
+        current_max = self.unlocked_levels.max()     
+        at_cap    = self.terrain_levels == current_max   
+        
+        envs = torch.arange(self.num_envs, device=self.device)
+        mask      = at_cap  & full_hist 
+        valid_envs  = envs[mask] 
+        
+        tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean()  
+        tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean()  
+        tracking_episode_length_mean = self.ep_length_history[valid_envs].mean()  
+
+        cond = (tracking_lin_vel_x_mean   > tracking_lin_vel_high)  & \
+        (tracking_ang_vel_x_mean   > tracking_ang_vel_high)  & \
+        (tracking_episode_length_mean > tracking_episode_length)
+
+        if cond:
+            self.unlocked_levels = torch.clamp(
+            self.unlocked_levels + 1,
+            max=self.max_terrain_level + 1
+            )               
+            next_lvl = torch.clamp(current_max + 1, max=self.max_terrain_level)
+            self.target_levels.fill_(next_lvl)
+
+            # Resample the target terrain level
+            span = self.target_levels - self.min_terrain_level  
+            u = torch.rand_like(span, dtype=torch.float)
+            power = 0
+            offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
+            new_targets = offset + self.min_terrain_level
+            self.target_levels = new_targets
+
+        pending_mask = self.terrain_levels[env_ids] != self.target_levels[env_ids]
+        pending_envs = env_ids[pending_mask]
+        new_levels = self.target_levels[pending_envs]
+        old_levels = self.terrain_levels[pending_envs]
+        self.terrain_levels[pending_envs] = new_levels
+        changed_mask = new_levels != old_levels
+        if changed_mask.any():
+            self._clear_tracking_history(pending_envs[changed_mask])
+
+
+
+
+
+
+    def update_terrain_level(self, env_ids):
+
+        if not self.init_done or not self.curriculum or self.test:
+            # do not change on initial reset
+            return
+
+        tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
+        tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
+        tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
+        
+        full_hist  = self.tracking_lin_vel_x_history_full 
+        current_max = self.unlocked_levels.max()     
+        at_cap    = self.terrain_levels == current_max   
+        
+        envs = torch.arange(self.num_envs, device=self.device)
+        mask      = at_cap  & full_hist 
+        valid_envs  = envs[mask] 
+        
+        tracking_lin_vel_x_mean = self.tracking_lin_vel_x_history[valid_envs].mean()  
+        tracking_ang_vel_x_mean = self.tracking_ang_vel_x_history[valid_envs].mean()  
+        tracking_episode_length_mean = self.ep_length_history[valid_envs].mean()  
+
+        cond = (tracking_lin_vel_x_mean   > tracking_lin_vel_high)  & \
+        (tracking_ang_vel_x_mean   > tracking_ang_vel_high)  & \
+        (tracking_episode_length_mean > tracking_episode_length)
+
+        if cond:
+            self.unlocked_levels = torch.clamp(
+            self.unlocked_levels + 1,
+            max=self.max_terrain_level + 1
+            )               
+            next_lvl = torch.clamp(current_max + 1, max=self.max_terrain_level)
+            self.target_levels.fill_(next_lvl)
+
+            # Resample the target terrain level
+            span = self.target_levels - self.min_terrain_level  
+            u = torch.rand_like(span, dtype=torch.float)
+            power = 0
+            offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
+            new_targets = offset + self.min_terrain_level
+            self.target_levels = new_targets
+
+        pending_mask = self.terrain_levels[env_ids] != self.target_levels[env_ids]
+        pending_envs = env_ids[pending_mask]
+        new_levels = self.target_levels[pending_envs]
+        old_levels = self.terrain_levels[pending_envs]
+        self.terrain_levels[pending_envs] = new_levels
+        changed_mask = new_levels != old_levels
+        if changed_mask.any():
+            self._clear_tracking_history(pending_envs[changed_mask])
