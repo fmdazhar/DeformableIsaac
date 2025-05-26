@@ -36,7 +36,7 @@ class VecEnv(VecEnvBase):
         self.episode_length_buf = self._task.progress_buf
         self.dt = self._task.dt
 
-        print(f"VecEnv: num_states={self.num_states}, num_observations={self.num_obs}, "
+        print(f"VecEnv: num_observations={self.num_obs}, "
               f"num_privileged_observations={self.num_privileged_obs}, num_obs_history={self.num_obs_history}, "
               f"num_actions={self.num_actions}, max_episode_length={self.max_episode_length}", 
               f"num_height_points={self.num_height_points}, num_proprio={self.num_proprio}, "

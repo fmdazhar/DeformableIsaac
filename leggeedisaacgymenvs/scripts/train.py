@@ -4,6 +4,7 @@ import gym
 import hydra
 import sys
 import torch
+import numpy as np
 from omegaconf import DictConfig
 import leggeedisaacgymenvs
 from leggeedisaacgymenvs.envs.vec_env import VecEnv
@@ -31,6 +32,7 @@ class Trainer:
 
         if self.cfg.test:
             log_dir = os.path.join(log_dir, "test")
+            os.makedirs(log_dir, exist_ok=True)
 
         if self.cfg.wandb_activate:
             # Make sure to install WandB if you actually use this.
@@ -67,7 +69,6 @@ class Trainer:
 
         else:
             policy = runner.get_inference_policy(device=device)
-            first_frame = True
             step_counter = 0
             num_episodes = 10
             max_steps = num_episodes * int(env.max_episode_length)
@@ -78,63 +79,60 @@ class Trainer:
 
             while env.simulation_app.is_running():
                 if env.world.is_playing():
-                    if first_frame:
-                        env.reset()
-                        first_frame = False
-                    else:
-                        if step_counter >= max_steps:
-                            print("Test duration reached. Stopping the simulation.")
-                            break  # stop after a fixed number of steps (optional for test duration)
-                        obs = env.get_observations().to(device)
-                        actions = policy(obs.detach())
-                        env._task.commands[:, 0] = x_vel_cmd
-                        env._task.commands[:, 1] = y_vel_cmd
-                        env._task.commands[:, 2] = z_vel_cmd
+                    if step_counter >= max_steps:
+                        print("Test duration reached. Stopping the simulation.")
+                        break  # stop after a fixed number of steps (optional for test duration)
+                    obs = env.get_observations().to(device)
+                    actions = policy(obs.detach())
+                    env._task.commands[:, 0] = x_vel_cmd
+                    env._task.commands[:, 1] = y_vel_cmd
+                    env._task.commands[:, 2] = z_vel_cmd
 
-                        env.step(actions.detach())
-                        if self.cfg.wandb_activate:
-                            log_data = {
-                                f"test/episode_sum_{k}": v.mean().item()
-                                for k, v in env._task.episode_sums.items()
-                            }
+                    env.step(actions.detach())
+                    if self.cfg.wandb_activate:
+                        log_data = {
+                            f"test/episode_sum_{k}": v.mean().item()
+                            for k, v in env._task.episode_sums.items()
+                        }
 
-                            lin_err = (env._task.base_lin_vel[:, 0] - env._task.commands[:, 0]).cpu()
-                            ang_err = (env._task.base_ang_vel[:, 2] - env._task.commands[:, 2]).cpu()
-                            log_data["test/lin_vel_x_rmsd"]  = torch.sqrt((lin_err ** 2).mean()).item()
-                            log_data["test/ang_vel_rmsd"]  = torch.sqrt((ang_err ** 2).mean()).item()
-                            log_data["test/mean_base_height"] = torch.mean(env._task.root_states[:, 2].unsqueeze(1) - env._task.measured_heights, dim=1).cpu()
-                            power_consumption = torch.sum(torch.multiply(env._task.torques, env._task.dof_vel), dim=1).cpu()
-                            log_data["test/mean_power_consumption"] = power_consumption.mean().item()
-                            max_torque, max_torque_indices = torch.max(torch.abs(env._task.torques), dim=1)
-                            log_data["test/mean_max_torque"] = max_torque.cpu()
+                        lin_err = (env._task.base_lin_vel[:, 0] - env._task.commands[:, 0]).cpu()
+                        ang_err = (env._task.base_ang_vel[:, 2] - env._task.commands[:, 2]).cpu()
+                        log_data["test/lin_vel_x_rmsd"]  = torch.sqrt((lin_err ** 2).mean()).item()
+                        log_data["test/ang_vel_rmsd"]  = torch.sqrt((ang_err ** 2).mean()).item()
+                        
+                        power_consumption = torch.sum(torch.multiply(env._task.torques, env._task.dof_vel), dim=1).cpu()
+                        log_data["test/mean_power_consumption"] = power_consumption.mean().item()
+                        
+                        max_torque, max_torque_indices = torch.max(torch.abs(env._task.torques), dim=1)
+                        log_data["test/mean_max_torque"] = max_torque.cpu()
 
-                            m = (env._task.total_masses + env._task.payloads).cpu()
-                            g = 9.8  # m/s^2
-                            v = torch.norm(env._task.base_lin_vel[:, 0:2], dim=1).cpu()
-                            cot = power_consumption / (m * g * v.clamp(min=1e-3))
-                            log_data["test/mean_cot"] = cot.mean().item()
+                        m = (env._task.total_masses + env._task.payloads).cpu()
+                        g = 9.8  # m/s^2
+                        v = torch.norm(env._task.base_lin_vel[:, 0:2], dim=1).cpu()
+                        cot = power_consumption / (m * g * v.clamp(min=1e-3))
+                        log_data["test/mean_cot"] = cot.mean().item()
 
-                            h = 0.28 #m
-                            froude_number =  env._task.base_lin_vel[:, 0].cpu() ** 2 / (g * h)
-                            log_data["test/mean_froude_number"] = froude_number.mean().item()
+                        h = 0.28 #m
+                        froude_number =  env._task.base_lin_vel[:, 0].cpu() ** 2 / (g * h)
+                        log_data["test/mean_froude_number"] = froude_number.mean().item()
 
-                            # Log the foot contact forces
-                            foot_forces = env._task.foot_contact_forces.detach().cpu()    # Nx4x3
-                            foot0 = foot_forces[0]
-                            foot0_norms = torch.norm(foot0, dim=1)       # Nx4
-                            foot_norm = torch.norm(foot_forces, dim=2).mean(dim=0)
-                            feet = ["FL", "FR", "RL", "RR"]
-                            for i, foot_name in enumerate(feet):
-                                # log each component
-                                fx, fy, fz = foot0[i].tolist()
-                                log_data[f"test/foot0_{foot_name}_fx"] = fx
-                                log_data[f"test/foot0_{foot_name}_fy"] = fy
-                                log_data[f"test/foot0_{foot_name}_fz"] = fz
-                                log_data[f"test/foot0_{foot_name}_norm"] = foot0_norms[i].item()
-                                log_data[f"test/mean_{foot_name}_norm"] = foot_norm[i].item()
+                        # Log the foot contact forces
+                        foot_forces = env._task.foot_contact_forces.detach().cpu()    # Nx4x3
+                        foot0 = foot_forces[0]
+                        foot0_norms = torch.norm(foot0, dim=1)       # Nx4
+                        norm = torch.sum((torch.norm(foot_forces[:, env._task.feet_indices.cpu(), :], dim=-1)).clip(min=0.), dim=1)
+                        log_data["test/foot0_norm"] = norm[0].item()
+                        feet = ["FL", "FR", "RL", "RR"]
+                        for i, foot_name in enumerate(feet):
+                            # log each component
+                            fx, fy, fz = foot0[i].tolist()
+                            log_data[f"test/foot0_{foot_name}_fx"] = fx
+                            log_data[f"test/foot0_{foot_name}_fy"] = fy
+                            log_data[f"test/foot0_{foot_name}_fz"] = fz
+                            log_data[f"test/foot0_{foot_name}_norm"] = foot0_norms[i].item()
 
-                            wandb.log(log_data, step=step_counter)
-                        step_counter += 1
+                        wandb.log(log_data, step=step_counter)
+                    step_counter += 1
 
                 else:
                     env.world.step(render=not self.cfg.headless)
@@ -201,31 +199,40 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.numEnvs = 1
         cfg.task.env.terrain.numLevels = 10
         cfg.task.env.terrain.numTerrains = 10
+        cfg.task.env.terrain.measureHeights = False
 
         cfg.task.env.terrain.curriculum = True
+        cfg.task.env.terrain.debugHeights = False
         cfg.task.env.commands.VelocityCurriculum = False
-        cfg.task.env.terrain.oobActive = False
+        cfg.task.env.terrain.oobActive = True
 
         cfg.task.env.terrain.terrain_types = [
-            {
-                "name": "flat",
-                "particle_present": False,
-                "compliant": True,
-                "row_count": 2,
-                "col_count": 1,
-                "level": 0,
-            },
+            # {
+            #     "name": "flat",
+            #     "particle_present": False,
+            #     "compliant": False,
+            #     "row_count": 2,
+            #     "col_count": 1,
+            #     "level": 0,
+            # },
+            # {
+            #     "name": "flat",
+            #     "particle_present": False,
+            #     "compliant": True,
+            #     "row_count": 2,
+            #     "col_count": 1,
+            #     "level": 0,
+            # },
             {
                 "name": "central_depression_terrain",
                 "compliant": True,
                 "level": 0,
                 "particle_present": True,
                 "system": 1,
-                "depth": 0.13,
+                "depth": 0.10,
                 "size": 4,
                 "row_count": 1,
                 "col_count": 1,
-
             }
         ]
         cfg.task.env.learn.addNoise = False

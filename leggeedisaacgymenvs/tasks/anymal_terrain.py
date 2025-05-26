@@ -4,6 +4,7 @@ import torch
 import omni
 import carb
 import copy
+from omni.physx import get_physx_cooking_interface
 
 from collections import defaultdict
 from typing import Dict, List, Tuple
@@ -84,7 +85,7 @@ class AnymalTerrainTask(RLTask):
         # Initialize dictionaries to track created particle systems and materials
         self.created_particle_systems = {}
         self.created_materials = {}
-        self.particle_instancers_by_level = {}
+        self.particle_instancers_by_level = defaultdict(lambda: defaultdict(dict))
         self._terrains_by_level = {}  # dictionary: level -> (tensor of row indices)
         self._particle_rows_by_level: Dict[int, List[int]] = {}
         self.total_particles = 0    # Initialize a counter for total particles
@@ -569,7 +570,7 @@ class AnymalTerrainTask(RLTask):
             successes = (mean_lin > high_thr[0]) & (mean_ang > high_thr[1]) & (mean_len > high_thr[2])
             failures  = (mean_lin <  low_thr[0]) & (mean_ang <  low_thr[1]) & (mean_len <  low_thr[2])
             if successes.any():
-                delta = 1
+                delta = 0.4
                 selected_envs = all_envs[successes]                 
                 bin_ids = self.env_command_bins[selected_envs.cpu().numpy()]
                 cur = self.curricula[int(cur_idx)]
@@ -594,20 +595,27 @@ class AnymalTerrainTask(RLTask):
 
     def update_terrain_level(self, env_ids):
 
-        if not self.init_done or not self.curriculum or self.test:
+        # if not self.init_done or not self.curriculum or self.test:
+        if not self.init_done or not self.curriculum:
+
             # do not change on initial reset
             return
 
-        current_max = self.unlocked_levels[env_ids].max() 
-        at_cap    = self.terrain_levels[env_ids] == current_max 
-        cond = self.oob[env_ids]
-        mask = at_cap & cond
-        valid_envs = env_ids[mask]
+        # current_max = self.unlocked_levels[env_ids].max() 
+        # at_cap    = self.terrain_levels[env_ids] == current_max 
+        # cond = self.oob[env_ids]
+        # mask = at_cap & cond
+        # valid_envs = env_ids[mask]
 
-        self.unlocked_levels[valid_envs] = torch.clamp(
-        self.unlocked_levels[valid_envs] + 1,
+        # self.unlocked_levels[valid_envs] = torch.clamp(
+        # self.unlocked_levels[valid_envs] + 1,
+        # max=self.max_terrain_level
+        # )
+        self.unlocked_levels[env_ids] = torch.clamp(
+        self.unlocked_levels[env_ids] + 1,
         max=self.max_terrain_level
         )
+        print(f"Unlocked levels: {self.unlocked_levels[env_ids]}")
 
         # Resample the target terrain level
         span = self.unlocked_levels[env_ids] - self.min_terrain_level  
@@ -617,11 +625,13 @@ class AnymalTerrainTask(RLTask):
         new_targets = offset + self.min_terrain_level
         self.terrain_levels[env_ids] = new_targets
 
+        print(f"New terrain levels: {self.terrain_levels[env_ids]}")
+
       
     def _assign_terrain_blocks(self, env_ids):
         unique_levels, inverse_idx = torch.unique(self.terrain_levels[env_ids], return_inverse=True)
         for i, lvl in enumerate(unique_levels):
-            self.create_particle_systems(int(lvl))
+            # self.create_particle_systems(int(lvl))
             # Get which envs in env_ids map to this terrain level
             group = env_ids[inverse_idx == i]
             if group.numel() == 0:
@@ -658,6 +668,9 @@ class AnymalTerrainTask(RLTask):
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
+        if self._particles_active:
+            self.create_particle_systems()
+
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
         scene.add(self._anymals._base)
@@ -870,12 +883,12 @@ class AnymalTerrainTask(RLTask):
         if len(env_ids) == 0:
             return
 
-        self.default_compliant_k = float(self._task_cfg["env"]["terrain"]["compliant"]["stiffnes"])
+        self.default_compliant_k = float(self._task_cfg["env"]["terrain"]["compliant"]["stiffness"])
         self.default_compliant_c = float(self._task_cfg["env"]["terrain"]["compliant"]["damping_multiplier"])
 
-        compliance_rand_cfg = self._task_cfg["env"]["randomizationRanges"] \
-                                    ["material_randomization"]["compliance"]
-        do_randomize = compliance_rand_cfg.get("enabled", False)
+        rand_enabled = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["enabled"]
+        complaince_rand_enabled = self._task_cfg["env"]["randomizationRanges"]["material_randomization"]["compliance"]["enabled"]
+        do_randomize = rand_enabled and complaince_rand_enabled
 
         # Separate env_ids by compliance flag
         compliance_true_ids = env_ids[self.compliance[env_ids]]
@@ -1374,7 +1387,7 @@ class AnymalTerrainTask(RLTask):
                     self.extras["extras"][f"avg_episode_reward_type_{int(t)}"] = avg  
             for lvl, pts in self.current_particle_positions.items():
                 count = pts.shape[0]
-                self.extras["extras"][f"num_particles_level_{int(lvl.item())}"] = count
+                self.extras["extras"][f"num_particles_level_{int(lvl)}"] = count
 
         if self.vel_curriculum:
             for cur, cat in zip(self.curricula, self.category_names):
@@ -1436,8 +1449,8 @@ class AnymalTerrainTask(RLTask):
         self.foot_pos, _ = self._anymals._foot.get_world_poses(clone=False)
 
     def refresh_net_contact_force_tensors(self):
-        self.foot_contact_forces = self.foot_contact_forces * 0.5 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
-        self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
+        # self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
         self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
@@ -1534,8 +1547,7 @@ class AnymalTerrainTask(RLTask):
             )
 
         self.timeout_buf = (self.progress_buf > self.max_episode_length) | self.oob # no terminal reward for time-outs
-        self.body_height_buf = torch.mean(self.base_pos[:, 2].unsqueeze(1) - self.measured_heights, dim=1) \
-                                   > self._task_cfg["env"]["learn"]["terminalBodyHeight"]
+        self.body_height_buf = self.base_pos[:, 2] > self._task_cfg["env"]["learn"]["terminalBodyHeight"]
 
         self.reset_buf |= self.body_height_buf.clone()
         self.reset_buf |= self.timeout_buf.clone()
@@ -1860,20 +1872,28 @@ class AnymalTerrainTask(RLTask):
     
 
     #------------ particle based functions----------------
-    def create_particle_systems(self, level):
+    def create_particle_systems(self, level: int | None = None):
+        levels_to_process = (
+            list(self._particle_rows_by_level.keys())
+            if level is None
+            else [level]
+        )
 
-        if level in self._instantiated_particle_levels:
-            return
-        rows = self._particle_rows_by_level.get(level, ())
-        if not rows:
-            return
-        # 2) mark as done
-        self._instantiated_particle_levels.add(level)
+        for lvl in levels_to_process:
+            # Skip if already done or no rows for this level
+            if lvl in self._instantiated_particle_levels:
+                continue
+            rows = self._particle_rows_by_level.get(lvl, ())
+            if not rows:
+                continue
+
+        # mark this level done
+        self._instantiated_particle_levels.add(lvl)
 
         for i in rows:
             terrain_row = self.terrain_details[i]
             row_idx, col_idx = int(terrain_row[2]), int(terrain_row[3])
-            grid_key = terrain_row[0]  # e.g. "grid_0_0"
+            grid_key = int(terrain_row[0]) 
             # Construct the system name from integer system_id
             system_id = int(terrain_row[7])                # e.g. 1, 2, ...
             system_name = f"system{system_id}"     # "system1", "system2", etc.            
@@ -1888,11 +1908,11 @@ class AnymalTerrainTask(RLTask):
                         prim_path=particle_system_path,
                         particle_system_enabled=True,
                         simulation_owner="/physicsScene",
-                        rest_offset=self._particle_cfg[system_name].get("rest_offset", None),
-                        contact_offset=self._particle_cfg[system_name].get("contact_offset", None),
-                        solid_rest_offset=self._particle_cfg[system_name].get("solid_rest_offset", None),
-                        fluid_rest_offset = self._particle_cfg[system_name].get("fluid_rest_offset", None),
-                        particle_contact_offset=self._particle_cfg[system_name].get("particle_contact_offset", None),
+                        rest_offset=self._particle_cfg[system_name].get("particle_system_rest_offset", None),
+                        contact_offset=self._particle_cfg[system_name].get("particle_system_contact_offset", None),
+                        solid_rest_offset=self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None),
+                        fluid_rest_offset = self._particle_cfg[system_name].get("particle_system_fluid_rest_offset", None),
+                        particle_contact_offset=self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None),
                         max_velocity=self._particle_cfg[system_name].get("particle_system_max_velocity", None),
                         max_neighborhood=self._particle_cfg[system_name].get("particle_system_max_neighborhood", None),
                         solver_position_iteration_count=self._particle_cfg[system_name].get("particle_system_solver_position_iteration_count", None),
@@ -1982,6 +2002,15 @@ class AnymalTerrainTask(RLTask):
 
     def create_particle_grid(self, grid_key, terrain_row, system_name):
         # Define the particle system path
+        use_mesh = self._particle_cfg["use_mesh_sampler"] 
+        if use_mesh:
+            self.create_particle_set_from_mesh(
+                grid_key,
+                terrain_row,
+                system_name,
+            )
+            return
+
         particle_system_path = f"/World/particleSystem/{system_name}"    
 
         # Extract parameters from terrain_detail and config
@@ -1999,7 +2028,7 @@ class AnymalTerrainTask(RLTask):
         
         x_position = env_origin_x - size / 2.0
         y_position = env_origin_y - size / 2.0
-        z_position = env_origin_z + 0.05  # Align with environment origin
+        z_position = env_origin_z + depth  # Align with environment origin
         lower = Gf.Vec3f(x_position, y_position, z_position)
 
         system_cfg = self._particle_cfg[system_name]
@@ -2015,18 +2044,18 @@ class AnymalTerrainTask(RLTask):
             radius = solid_rest_offset
             particle_spacing = particle_spacing_factor * radius
 
-        num_samples_x = int(size / particle_spacing) + 1
-        num_samples_y = int(size / particle_spacing) + 1
-        num_samples_z = int(depth / particle_spacing) + 1
+        num_samples_x = int(size / particle_spacing)
+        num_samples_y = int(size / particle_spacing)
+        num_samples_z = int(depth / particle_spacing)
 
-        jitter_factor = system_cfg["particle_grid_jitter_factor"] * (particle_spacing - 2 * radius) * 0.5
+        jitter_factor = system_cfg["particle_grid_jitter_factor"]  * particle_spacing
 
         positions = []
         velocities = []
         uniform_particle_velocity = Gf.Vec3f(0.0)
         ind = 0
-        x = lower[0]
-        y = lower[1]
+        x = lower[0]  
+        y = lower[1]  
         z = lower[2]
         for i in range(num_samples_x):
             for j in range(num_samples_y):
@@ -2066,8 +2095,8 @@ class AnymalTerrainTask(RLTask):
                 grid_key,
                 self._particle_cfg[system_name]["particle_grid_particle_mass"],
                 self._particle_cfg[system_name]["particle_grid_density"],
-                num_prototypes=1,  # Adjust if needed
-                prototype_indices=None  # Adjust if needed
+                # num_prototypes=1,  # Adjust if needed
+                # prototype_indices=None  # Adjust if needed
             )
             print(f"[INFO] Created Particle Grid at {particle_point_instancer_path}")
             self.particle_instancers_by_level[level][system_name][grid_key] = particle_point_instancer_path
@@ -2090,6 +2119,107 @@ class AnymalTerrainTask(RLTask):
             print(f"[INFO] Created {count} Particles at {particle_point_instancer_path}")
         else:
             print(f"[INFO] Particle Point Instancer already exists at {particle_point_instancer_path}")
+
+
+    def create_particle_set_from_mesh(
+        self,
+        grid_key,
+        terrain_row,
+        system_name,
+    ):
+        stage = self._stage
+        level = int(terrain_row[1])
+        row_idx = int(terrain_row[2])
+        col_idx = int(terrain_row[3])
+        depth = float(terrain_row[8])
+        size  = float(terrain_row[9])
+
+        particle_system_path = f"/World/particleSystem/{system_name}" 
+        particle_set_path = f"/World/particleSystem/{system_name}/level_{level}/grid_{grid_key}/particles"
+        if not self._stage.GetPrimAtPath(particle_set_path).IsValid():
+            cube_mesh_path = f"/World/particleSystem/{system_name}/level_{level}/grid_{grid_key}/cube_mesh"
+            
+            cube_resolution = (
+                2  # resolution can be low because we'll sample the surface / volume only irrespective of the vertex count
+            )
+            omni.kit.commands.execute(
+                "CreateMeshPrimWithDefaultXform", prim_type="Cube",prim_path=cube_mesh_path, u_patches=cube_resolution, v_patches=cube_resolution, select_new_prim=False
+            )        
+            cube_mesh = UsdGeom.Mesh.Get(self._stage, Sdf.Path(cube_mesh_path))
+            physicsUtils.setup_transform_as_scale_orient_translate(cube_mesh)
+            env_origin = self.terrain_origins[row_idx, col_idx].float()
+            env_origin_x = float(env_origin[0])
+            env_origin_y = float(env_origin[1])
+
+            physicsUtils.set_or_add_translate_op(
+            cube_mesh, 
+            Gf.Vec3f(
+                env_origin_x, 
+                env_origin_y, 
+                0.0 
+                )
+            )
+            physicsUtils.set_or_add_scale_op(
+                cube_mesh, 
+                Gf.Vec3f(
+                    size*0.97, 
+                    size*0.97, 
+                    depth
+                )
+            )
+            
+            system_cfg = self._particle_cfg[system_name]
+            solid_rest_offset = system_cfg.get("particle_system_solid_rest_offset", None)
+            particle_spacing_factor = system_cfg.get("particle_grid_spacing", None)
+            fluid = system_cfg.get("particle_grid_fluid", None)
+
+            if fluid:
+                fluid_rest_offset = 0.99 * 0.6 * system_cfg.get("particle_system_particle_contact_offset", None)
+                radius = fluid_rest_offset
+                particle_sampler_distance = particle_spacing_factor * radius
+            else:
+                radius = solid_rest_offset
+                particle_sampler_distance = particle_spacing_factor * radius
+
+            # Apply particle sampling on the mesh
+            sampling_api = PhysxSchema.PhysxParticleSamplingAPI.Apply(cube_mesh.GetPrim())
+            # sampling_api.CreateSamplingDistanceAttr().Set(particle_sampler_distance)
+            sampling_api.CreateMaxSamplesAttr().Set(5e5)
+            sampling_api.CreateVolumeAttr().Set(True)  # Set to True if sampling volume, False for surface
+            cube_mesh.CreateVisibilityAttr("invisible")
+
+
+            points = UsdGeom.Points.Define(self._stage, particle_set_path)
+            points.CreateDisplayColorAttr().Set(Vt.Vec3fArray([Gf.Vec3f(71.0 / 255.0, 125.0 / 255.0, 1.0)]))
+            particleUtils.configure_particle_set(
+            points.GetPrim(), 
+            Sdf.Path(particle_system_path), 
+            self._particle_cfg[system_name]["particle_grid_self_collision"],
+            self._particle_cfg[system_name]["particle_grid_fluid"], 
+            grid_key,
+            self._particle_cfg[system_name]["particle_grid_particle_mass"],
+            self._particle_cfg[system_name]["particle_grid_density"])
+
+            # reference the particle set in the sampling api
+            sampling_api.CreateParticlesRel().AddTarget(particle_set_path)
+
+            self.particle_instancers_by_level[level][system_name][grid_key] = particle_set_path
+
+            # Increase counters, etc.
+            # create particle set
+            omni.kit.app.get_app().update()
+            while (get_physx_cooking_interface().get_num_collision_tasks() != 0):
+                omni.kit.app.get_app().update()
+            positions = points.GetPointsAttr().Get()
+            count = len(positions)
+            self.total_particles += count
+            key = (level, system_name, grid_key)
+            self.initial_particle_positions[key] = Vt.Vec3fArray(positions)
+            self.particle_counts[key] = count
+            print(f"[INFO] Created {count} Particles at {particle_set_path}")
+        else:
+            print(f"[INFO] Particle Point Instancer already exists at {particle_set_path}")
+
 
     def _update_particle_cache(self): 
         if not self.particle_instancers_by_level:
@@ -2173,7 +2303,6 @@ class AnymalTerrainTask(RLTask):
 
     def query_top_particle_positions(self, visualize=False):
         if not self.current_particle_positions:
-            print("No particle instancers registered yet; skipping top particle query.")
             return
 
         positions = []
@@ -2361,14 +2490,6 @@ class AnymalTerrainTask(RLTask):
         sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(0.0, 1.0, 0.0)])  # green for clarity
 
     def _add_depression_colliders(self, thickness: float = 0.05):
-        """
-        Create an invisible PhysX box around every terrain patch whose
-        `name` == "central_depression_terrain".  Call once after the stage
-        exists (i.e. from `get_terrain()` or `set_up_scene()`).
-
-        Args:
-            thickness: wall thickness in metres.
-        """
         for (idx, level, row, col, terrain_type,
             particles, compliant, system,
             depth, size,
@@ -2379,13 +2500,11 @@ class AnymalTerrainTask(RLTask):
 
             centre_xyz = self.env_origins[row, col]
             centre = Gf.Vec3f(float(centre_xyz[0]),
-                          float(centre_xyz[2]),          # env_origins[..., 2] is height
-                          float(centre_xyz[1]))
+                          float(centre_xyz[1]),          # env_origins[..., 2] is height
+                          0)
             
-            side_margin = 0.5
-            side = float(size) + side_margin  
-            wall_margin = 2.0         
-            height   = abs(float(depth)) + wall_margin                
+            side = float(size)
+            height   = 3               
 
             path = Sdf.Path(
                 f"/World/depressionColliders/dep_{row}_{col}"
@@ -2395,86 +2514,68 @@ class AnymalTerrainTask(RLTask):
                 side_length   = side,
                 height        = height,
                 translate     = centre,
-                thickness     = thickness,
             )
 
-    def create_particle_box_collider(
-        self,
-        path: Sdf.Path,
-        side_length,
-        height,
-        translate: Gf.Vec3f = Gf.Vec3f(0, 0, 0),
-        thickness: float = 10.0,
-    ):
-        """
-        Creates an invisible collider box to catch particles. Opening is in y-up
-
-        Args:
-            path:           box path (xform with cube collider children that make up box)
-            side_length:    inner side length of box
-            height:         height of box
-            translate:      location of box, w.r.t it's bottom center
-            thickness:      thickness of the box walls
-        """
-        xform = UsdGeom.Xform.Define(self._stage, path)
-        # xform.MakeInvisible()
+    def create_particle_box_collider(self, path, side_length, height, translate, thickness: float = 0.5,):
+        xform = UsdGeom.Xform.Define(self.stage, path)
+        xform.MakeInvisible()
         xform_path = xform.GetPath()
         physicsUtils.set_or_add_translate_op(xform, translate=translate)
         cube_width = side_length + 2.0 * thickness
         offset = side_length * 0.5 + thickness * 0.5
         # front and back (+/- x)
-        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("front"))
+        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("top"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, height * 0.5, offset))
-        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, height, thickness))
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, 0,  height * 0.5  ))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, cube_width, thickness))
 
-        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("back"))
+        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("bottom"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, height * 0.5, -offset))
-        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, height, thickness))
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, 0,  -height * 0.5 ))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, cube_width, thickness))
 
         # left and right:
-        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("left"))
+        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("left"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(-offset, height * 0.5, 0))
-        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, height, cube_width))
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(offset, 0, 0))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, cube_width, height))
 
-        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("right"))
+        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("right"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(offset, height * 0.5, 0))
-        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, height, cube_width))
+        physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(-offset, 0,0))
+        physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, cube_width, height ))
 
         # bottom
-        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("bottom"))
+        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("front"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         # half‐thickness up from the base
         physicsUtils.set_or_add_translate_op(
             cube,
-            Gf.Vec3f(0, thickness * 0.5, 0)
+            Gf.Vec3f(0, -offset, 0)
         )
         # full width/depth, thin height
         physicsUtils.set_or_add_scale_op(
             cube,
-            Gf.Vec3f(cube_width, thickness, cube_width)
+            Gf.Vec3f(cube_width, thickness, height)
         )
 
         # top
-        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("top"))
+        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("back"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         # just below the lid
         physicsUtils.set_or_add_translate_op(
             cube,
-            Gf.Vec3f(0, height - thickness * 0.5, 0)
+            Gf.Vec3f(0, offset,0)
         )
         physicsUtils.set_or_add_scale_op(
             cube,
-            Gf.Vec3f(cube_width, thickness, cube_width)
+            Gf.Vec3f(cube_width, thickness, height)
         )
 
         xform_path_str = str(xform_path)
@@ -2488,7 +2589,7 @@ class AnymalTerrainTask(RLTask):
             xform_path_str + "/top",
         ]
         glassPath = "/World/Looks/OmniGlass"
-        if not self._stage.GetPrimAtPath(glassPath):
+        if not self.stage.GetPrimAtPath(glassPath):
             mtl_created = []
             omni.kit.commands.execute(
                 "CreateAndBindMdlMaterialFromLibrary",
@@ -2504,6 +2605,7 @@ class AnymalTerrainTask(RLTask):
                 "BindMaterial", prim_path=path, material_path=glassPath
             )
 
+            
 #------------ helper functions----------------
 
 @torch.jit.script
