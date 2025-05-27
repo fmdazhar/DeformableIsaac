@@ -632,6 +632,76 @@ from omni.isaac.core.prims import XFormPrim - - from isaacsim.core.prims import 
         self.command_ranges_by_terrain = base.unsqueeze(0).repeat(len(unique_ids), 1).clone()
 
     
+    # def _resample_commands(self, env_ids):
+    #     """
+    #     Resample (x vel, y vel, yaw vel) commands for the envs in `env_ids`.
+    #     Curriculum progress is now estimated from the *last* entry of the
+    #     tracking-history buffers instead of the aggregated episode‐sums.
+    #     """
+    #     if len(env_ids) == 0:
+    #         return
+            
+    #     self.env_command_categories = torch.as_tensor(
+    #         [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
+    #         dtype=torch.long,
+    #         device=self.device,
+    #     )
+    #     window_size = self.command_curriculum_cfg["tracking_length"]
+    #     last = torch.stack(
+    #         [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
+    #         for k in range(window_size) ],
+    #         dim=0
+    #     ) 
+
+    #     # Curriculum success thresholds
+    #     thr = [
+    #         self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt,
+    #         self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt,
+    #         self.command_curriculum_cfg["tracking_eps_length_high"]
+    #     ]
+
+    #     # Split envs by terrain-type curriculum --------------------------
+    #     cats = self.env_command_categories[env_ids.cpu()]                        
+    #     for cur_idx in torch.unique(cats):
+    #         mask = (cats == cur_idx)
+    #         sub_envs = env_ids[mask]                                            
+    #         if sub_envs.numel() == 0:
+    #             continue
+    #         # ---- pull the last-window rewards & episode lengths, shape: [W, B]
+    #         idx = last[:, sub_envs]
+    #         tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[sub_envs.unsqueeze(0), idx]
+    #         tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[sub_envs.unsqueeze(0), idx]
+    #         leng  = self.ep_length_history        [sub_envs.unsqueeze(0), idx]
+
+    #         # ignore if any of the last-window slots are still zero
+    #         if not ((tracking_lin_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
+    #             continue
+
+    #         r_mean_lin = tracking_lin_vel_x_history.mean().item()
+    #         r_mean_ang = tracking_ang_vel_x_history.mean().item()
+    #         l_mean = leng.float().mean().item()
+
+    #         rewards = [r_mean_lin, r_mean_ang, l_mean]
+
+    #         # Let the curriculum object update its bin statistics
+    #         cur = self.curricula[int(cur_idx)]
+    #         old_bins = self.env_command_bins[sub_envs.cpu().numpy()]
+    #         cur.update(old_bins, rewards, thr,
+    #                         local_range=np.array([0.55, 0.55, 0.55]))
+
+    #         # Sample new commands & assign them
+    #         new_cmds, new_bins = cur.sample(batch_size=sub_envs.numel())
+    #         changed_mask = new_bins != old_bins
+    #         if changed_mask.any():                               # at least one env moved
+    #             changed_envs = sub_envs[torch.from_numpy(changed_mask)
+    #                                     .to(sub_envs.device)]
+    #             self._clear_tracking_history(changed_envs)
+
+    #         self.env_command_bins     [sub_envs.cpu().numpy()] = new_bins
+    #         cmd_tensor = torch.tensor(
+    #             new_cmds[:, :3], dtype=self.commands.dtype, device=self.device
+    #         )
+    #         self.commands[sub_envs, :3] = cmd_tensor
     def update_command_curriculum(self, env_ids: torch.Tensor) -> None:
         """
         Expand / contract the allowable **x-linear-velocity** range *separately*

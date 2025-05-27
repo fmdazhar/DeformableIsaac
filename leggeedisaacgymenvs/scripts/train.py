@@ -232,7 +232,7 @@ def parse_hydra_configs(cfg: DictConfig):
                 "depth": 0.10,
                 "size": 4,
                 "row_count": 1,
-                "col_count": 1,
+                "col_count": 2,
             }
         ]
         cfg.task.env.learn.addNoise = False

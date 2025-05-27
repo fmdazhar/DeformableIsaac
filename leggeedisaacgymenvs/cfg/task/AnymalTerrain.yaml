@@ -36,10 +36,11 @@ env:
     dynamicFriction: 1.0 # [-]
     restitution: 0. # [-]
 
+    flat: False
     numLevels: 10 # for no curriculum
     numTerrains: 20 # for no curriculum
 
-    curriculum: True
+    curriculum: True  #level-based updates
     curriculum_thresholds:
       power: 0.0
 
@@ -342,7 +343,7 @@ env:
             pbd_material_particle_friction_scale_range: [0.15, 0.3]
             pbd_material_particle_adhesion_scale_range: [500, 3000]
             pbd_material_density_range: [1000, 2500]
-            pbd_material_damping_range: [2, 2]
+            pbd_material_damping_range: [0, 5]
 
           system2: #0.15
             enabled: True
@@ -350,17 +351,17 @@ env:
             pbd_material_particle_friction_scale_range: [0.15, 0.3]
             pbd_material_particle_adhesion_scale_range: [1000, 5000]
             pbd_material_density_range: [1000, 2500]
-            pbd_material_damping_range: [2, 2]
+            pbd_material_damping_range: [0, 5]
 
           system3:
             enabled: True
             pbd_material_density_range: [1000, 2000]
             pbd_material_friction_range: [0.1, 0.2]
-            pbd_material_damping_range: [0, 0]
+            pbd_material_damping_range: [0, 5]
             pbd_material_cohesion_range: [0.01, 0.2]
-            pbd_material_drag_range: [0.0, 0.1]
-            pbd_material_lift_range: [0.0, 0.5]
-            pbd_material_surface_tension_range: [0.0074, 0.1]
+            # pbd_material_drag_range: [0.0, 0.1]
+            # pbd_material_lift_range: [0.0, 0.5]
+            # pbd_material_surface_tension_range: [0.0074, 0.1]
             pbd_material_viscosity_range: [0.0000017, 0.0017]
 
 sim:

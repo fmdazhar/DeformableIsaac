@@ -245,7 +245,7 @@ class AnymalTerrainTask(RLTask):
         active_system_ids = {int(s.item())
                          for s in torch.unique(self.terrain_details[:, 7])
                          if int(s.item()) > 0}
-        sro_vals = []
+        sro_vals = [] # Initialize a list to collect solid rest offsets
         for sid in active_system_ids:
             system_name = f"system{sid}"
             fluid = self._particle_cfg[system_name].get("particle_grid_fluid", False)
@@ -308,12 +308,12 @@ class AnymalTerrainTask(RLTask):
         self.pbd_param_names = sorted(merged.keys())
         self.pbd_range = [merged[k] for k in self.pbd_param_names]
 
-        self.pbd_param_names.append("solid_rest_offset")
-        if sro_vals:
-            min_sro, max_sro = min(sro_vals), max(sro_vals)
-        else:
-            min_sro = max_sro = 0.0
-        self.pbd_range.append([min_sro, max_sro])
+        # self.pbd_param_names.append("solid_rest_offset")
+        # if sro_vals:
+        #     min_sro, max_sro = min(sro_vals), max(sro_vals)
+        # else:
+        #     min_sro = max_sro = 0.0
+        # self.pbd_range.append([min_sro, max_sro])
 
         self.pbd_param_names += ["particles_present", "fluid_present"]
         self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
@@ -437,79 +437,6 @@ class AnymalTerrainTask(RLTask):
         for cur in self.curricula:
             cur.set_to(low=low, high=high)
 
-
-    # def _resample_commands(self, env_ids):
-    #     """
-    #     Resample (x vel, y vel, yaw vel) commands for the envs in `env_ids`.
-    #     Curriculum progress is now estimated from the *last* entry of the
-    #     tracking-history buffers instead of the aggregated episode‐sums.
-    #     """
-    #     if len(env_ids) == 0:
-    #         return
-            
-    #     self.env_command_categories = torch.as_tensor(
-    #         [self.type2idx[int(t)] for t in self.terrain_types.cpu()],
-    #         dtype=torch.long,
-    #         device=self.device,
-    #     )
-    #     window_size = self.command_curriculum_cfg["tracking_length"]
-    #     last = torch.stack(
-    #         [ (self.tracking_lin_vel_x_history_idx - k - 1) % self.tracking_history_len
-    #         for k in range(window_size) ],
-    #         dim=0
-    #     ) 
-
-    #     # Curriculum success thresholds
-    #     thr = [
-    #         self.command_curriculum_cfg["tracking_lin_vel_high"] * self.reward_scales["tracking_lin_vel"] / self.dt,
-    #         self.command_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt,
-    #         self.command_curriculum_cfg["tracking_eps_length_high"]
-    #     ]
-
-    #     # Split envs by terrain-type curriculum --------------------------
-    #     cats = self.env_command_categories[env_ids.cpu()]                        
-    #     for cur_idx in torch.unique(cats):
-    #         mask = (cats == cur_idx)
-    #         sub_envs = env_ids[mask]                                            
-    #         if sub_envs.numel() == 0:
-    #             continue
-    #         # ---- pull the last-window rewards & episode lengths, shape: [W, B]
-    #         idx = last[:, sub_envs]
-    #         tracking_lin_vel_x_history  = self.tracking_lin_vel_x_history[sub_envs.unsqueeze(0), idx]
-    #         tracking_ang_vel_x_history = self.tracking_ang_vel_x_history[sub_envs.unsqueeze(0), idx]
-    #         leng  = self.ep_length_history        [sub_envs.unsqueeze(0), idx]
-
-    #         # ignore if any of the last-window slots are still zero
-    #         if not ((tracking_lin_vel_x_history != 0).all() and (tracking_ang_vel_x_history != 0).all() and (leng != 0).all()):
-    #             continue
-
-    #         r_mean_lin = tracking_lin_vel_x_history.mean().item()
-    #         r_mean_ang = tracking_ang_vel_x_history.mean().item()
-    #         l_mean = leng.float().mean().item()
-
-    #         rewards = [r_mean_lin, r_mean_ang, l_mean]
-
-    #         # Let the curriculum object update its bin statistics
-    #         cur = self.curricula[int(cur_idx)]
-    #         old_bins = self.env_command_bins[sub_envs.cpu().numpy()]
-    #         cur.update(old_bins, rewards, thr,
-    #                         local_range=np.array([0.55, 0.55, 0.55]))
-
-    #         # Sample new commands & assign them
-    #         new_cmds, new_bins = cur.sample(batch_size=sub_envs.numel())
-    #         changed_mask = new_bins != old_bins
-    #         if changed_mask.any():                               # at least one env moved
-    #             changed_envs = sub_envs[torch.from_numpy(changed_mask)
-    #                                     .to(sub_envs.device)]
-    #             self._clear_tracking_history(changed_envs)
-
-    #         self.env_command_bins     [sub_envs.cpu().numpy()] = new_bins
-    #         cmd_tensor = torch.tensor(
-    #             new_cmds[:, :3], dtype=self.commands.dtype, device=self.device
-    #         )
-    #         self.commands[sub_envs, :3] = cmd_tensor
-
-
     def _update_command_distribution(self, env_ids):
         if len(env_ids) == 0:
             return
@@ -601,16 +528,17 @@ class AnymalTerrainTask(RLTask):
             # do not change on initial reset
             return
 
-        # current_max = self.unlocked_levels[env_ids].max() 
-        # at_cap    = self.terrain_levels[env_ids] == current_max 
-        # cond = self.oob[env_ids]
-        # mask = at_cap & cond
-        # valid_envs = env_ids[mask]
+        current_max = self.unlocked_levels[env_ids].max() 
+        at_cap    = self.terrain_levels[env_ids] == current_max 
+        cond = self.oob[env_ids]
+        mask = at_cap & cond
+        valid_envs = env_ids[mask]
 
-        # self.unlocked_levels[valid_envs] = torch.clamp(
-        # self.unlocked_levels[valid_envs] + 1,
-        # max=self.max_terrain_level
-        # )
+        self.unlocked_levels[valid_envs] = torch.clamp(
+        self.unlocked_levels[valid_envs] + 1,
+        max=self.max_terrain_level
+        )
+        
         self.unlocked_levels[env_ids] = torch.clamp(
         self.unlocked_levels[env_ids] + 1,
         max=self.max_terrain_level
@@ -710,7 +638,7 @@ class AnymalTerrainTask(RLTask):
         self.target_levels = self.terrain_levels.clone()
         self.unlocked_levels = torch.zeros_like(self.terrain_levels)
         self._create_trimesh(create_mesh=create_mesh)
-        # self._add_depression_colliders()
+        self._add_depression_colliders()
         
         levels = self.terrain_details[:, 1].long()  # shape: (N, ) where N=# of terrain blocks
         has_particles = (self.terrain_details[:, 5] > 0)
@@ -2360,7 +2288,7 @@ class AnymalTerrainTask(RLTask):
                 particle_mask = mask[:, idx]
                 if particle_mask.any():
                     max_z = particles[particle_mask, 2].max()
-                    top_z = torch.minimum(max_z, torch.tensor(0.0, device=max_z.device))
+                    top_z = torch.minimum(max_z, torch.tensor(0.0, device=self.device))
                     self.height_samples[i, j] = int(round((top_z / self.terrain.vertical_scale).item()))
 
                 if visualize:
@@ -2497,17 +2425,21 @@ class AnymalTerrainTask(RLTask):
 
             if size <= 0.0 or depth <= 0.0:          # only depressions have +size & +depth
                 continue
-
-            centre_xyz = self.env_origins[row, col]
-            centre = Gf.Vec3f(float(centre_xyz[0]),
-                          float(centre_xyz[1]),          # env_origins[..., 2] is height
-                          0)
+            row_idx = int(row.item())
+            col_idx = int(col.item())
             
+            env_origin = self.terrain_origins[row_idx, col_idx].float()
+            env_origin_x = float(env_origin[0])
+            env_origin_y = float(env_origin[1])
+            env_origin_z = float(env_origin[2])
+            centre = Gf.Vec3f(env_origin_x,
+                          env_origin_y,          
+                          0)
             side = float(size)
             height   = 3               
 
             path = Sdf.Path(
-                f"/World/depressionColliders/dep_{row}_{col}"
+                f"/World/depressionColliders/dep_{row_idx}_{col_idx}"
             )
             self.create_particle_box_collider(
                 path          = path,
@@ -2517,40 +2449,40 @@ class AnymalTerrainTask(RLTask):
             )
 
     def create_particle_box_collider(self, path, side_length, height, translate, thickness: float = 0.5,):
-        xform = UsdGeom.Xform.Define(self.stage, path)
+        xform = UsdGeom.Xform.Define(self._stage, path)
         xform.MakeInvisible()
         xform_path = xform.GetPath()
         physicsUtils.set_or_add_translate_op(xform, translate=translate)
         cube_width = side_length + 2.0 * thickness
         offset = side_length * 0.5 + thickness * 0.5
         # front and back (+/- x)
-        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("top"))
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("top"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, 0,  height * 0.5  ))
         physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, cube_width, thickness))
 
-        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("bottom"))
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("bottom"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(0, 0,  -height * 0.5 ))
         physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(cube_width, cube_width, thickness))
 
         # left and right:
-        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("left"))
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("left"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(offset, 0, 0))
         physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, cube_width, height))
 
-        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("right"))
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("right"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         physicsUtils.set_or_add_translate_op(cube, Gf.Vec3f(-offset, 0,0))
         physicsUtils.set_or_add_scale_op(cube, Gf.Vec3f(thickness, cube_width, height ))
 
         # bottom
-        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("front"))
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("front"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         # half‐thickness up from the base
@@ -2565,7 +2497,7 @@ class AnymalTerrainTask(RLTask):
         )
 
         # top
-        cube = UsdGeom.Cube.Define(self.stage, xform_path.AppendChild("back"))
+        cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("back"))
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         # just below the lid
@@ -2589,7 +2521,7 @@ class AnymalTerrainTask(RLTask):
             xform_path_str + "/top",
         ]
         glassPath = "/World/Looks/OmniGlass"
-        if not self.stage.GetPrimAtPath(glassPath):
+        if not self._stage.GetPrimAtPath(glassPath):
             mtl_created = []
             omni.kit.commands.execute(
                 "CreateAndBindMdlMaterialFromLibrary",
