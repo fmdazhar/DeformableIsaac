@@ -34,7 +34,9 @@ algorithm:
   min_policy_std: [0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25]
   use_history_encoding: True
   dagger_update_freq: 20
-  priv_reg_coef_schedual: [0, 0.1, 0, 1000]
+  priv_reg_coef_schedual:
+  - [0,   0.1, 0, 2000]
+  - [0.1, 1.0, 2000, 1000]
 
 runner:
   policy_class_name: ActorCritic

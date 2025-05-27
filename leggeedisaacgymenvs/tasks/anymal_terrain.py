@@ -1437,7 +1437,7 @@ class AnymalTerrainTask(RLTask):
             if self.measure_heights:
                 if self._particles_active:
                     self._update_particle_cache()
-                    self.query_top_particle_positions(visualize=False) 
+                    self.query_top_particle_positions(visualize=True) 
                 self.get_heights_below_foot()
 
             self.check_termination()
@@ -2161,31 +2161,31 @@ class AnymalTerrainTask(RLTask):
                     prim = self._stage.GetPrimAtPath(inst_path)
                     if not prim.IsValid():
                         continue
-                    inst = UsdGeom.PointInstancer(prim)
-                    vt_arr = inst.GetPositionsAttr().Get() or Vt.Vec3fArray()
+                    inst = UsdGeom.Points.Get(self._stage, prim.GetPath())
+                    vt_arr = inst.GetPointsAttr().Get() or Vt.Vec3fArray()
                     if len(vt_arr) == 0:
                         continue
                     pts = torch.tensor(vt_arr, dtype=torch.float32, device=self.device)
                     
-                    # --- auto‑reset on excessive particle loss -----------------
-                    key = (lvl, system_name, grid_key)
-                    init_cnt = self.particle_counts.get(key)
-                    lx0, lx1, ly0, ly1 = self.bounds.get(int(grid_key))
-                    lz0 = -2
-                    lz1 = 2
-                    inside = (pts[:,0] >= lx0) & (pts[:,0] < lx1) & (pts[:,1] >= ly0) & (pts[:,1] < ly1) & (pts[:, 2] >= lz0) & (pts[:, 2] < lz1)
-                    filtered = pts[inside]
-                    valid_count = filtered.shape[0]
-                    needs_reset = self._particle_cfg["reset_check"] and init_cnt is not None and valid_count < self._particle_cfg["particle_reset_threshold"] * init_cnt
-                    if needs_reset:
-                        carb.log_warn(
-                            f"[PBD]Resetting {system_name}@level{lvl}: "
-                            f"{len(positions)}/{init_cnt} particles remain (<80%)."
-                        )
-                        self._reset_particle_grid(lvl, system_name, grid_key)
-                        init_pos = self.initial_particle_positions[(lvl, system_name, grid_key)]
-                        pts      = torch.tensor(init_pos, dtype=torch.float32, device=self.device)
-                    positions.append(filtered)
+                    # # --- auto‑reset on excessive particle loss -----------------
+                    # key = (lvl, system_name, grid_key)
+                    # init_cnt = self.particle_counts.get(key)
+                    # lx0, lx1, ly0, ly1 = self.bounds.get(int(grid_key))
+                    # # lz0 = -2
+                    # # lz1 = 2
+                    # inside = (pts[:,0] >= lx0) & (pts[:,0] < lx1) & (pts[:,1] >= ly0) & (pts[:,1] < ly1)  #& (pts[:, 2] >= lz0) & (pts[:, 2] < lz1)
+                    # filtered = pts[inside]
+                    # valid_count = filtered.shape[0]
+                    # needs_reset = self._particle_cfg["reset_check"] and init_cnt is not None and valid_count < self._particle_cfg["particle_reset_threshold"] * init_cnt
+                    # if needs_reset:
+                    #     carb.log_warn(
+                    #         f"[PBD]Resetting {system_name}@level{lvl}: "
+                    #         f"{len(positions)}/{init_cnt} particles remain (<80%)."
+                    #     )
+                    #     self._reset_particle_grid(lvl, system_name, grid_key)
+                    #     init_pos = self.initial_particle_positions[(lvl, system_name, grid_key)]
+                    #     pts      = torch.tensor(init_pos, dtype=torch.float32, device=self.device)
+                    positions.append(pts)
             self.current_particle_positions[lvl] = (
             torch.cat(positions, dim=0)
             if positions
@@ -2229,80 +2229,184 @@ class AnymalTerrainTask(RLTask):
         if env_ids.numel():
             self.reset_idx(env_ids)
 
+    # def query_top_particle_positions(self, visualize=False):
+    #     if not self.current_particle_positions:
+    #         return
+    #     cell_scale     = self.terrain.horizontal_scale
+    #     border_size    = self.terrain.border_size
+    #     half_cell      = cell_scale / 2.0
+    #     v_scale        = self.terrain.vertical_scale
+    #     vis_positions, vis_proto_idx = [], []
+    #     # Iterate each level and its systems
+        
+    #     for lvl, particles in self.current_particle_positions.items():
+    #         if particles.size == 0:
+    #             continue
+            
+    #         env_ids = (self.terrain_levels == lvl).nonzero(as_tuple=False).flatten()
+    #         if env_ids.numel() == 0:
+    #             continue  # no robots on this level this frame
+
+    #         foot_positions = self.foot_pos.view(self.num_envs, 4, 3)  
+    #         if env_ids is not None:
+    #             foot_positions  = foot_positions[env_ids]    
+    #         N = foot_positions.shape[0]
+    #         points = (foot_positions.unsqueeze(2) + self.particle_height_points.view(N, 4, -1, 3)).reshape(N, self._num_particle_height_points, 3)
+    #         points += self.terrain.border_size
+    #         points = (points / self.terrain.horizontal_scale).long()
+    #         px = points[:, :, 0].view(-1)
+    #         py = points[:, :, 1].view(-1)
+    #         px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
+    #         py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
+
+    #         grid_indices = torch.stack((px, py), dim=1)  
+    #         uniq_cells   = torch.unique(grid_indices, dim=0)  
+    #         cell_x = uniq_cells[:, 0].float() * cell_scale - border_size          # (M,)
+    #         cell_y = uniq_cells[:, 1].float() * cell_scale - border_size 
+
+    #         cx_min, cx_max = cell_x - half_cell, cell_x + half_cell               # (M,)
+    #         cy_min, cy_max = cell_y - half_cell, cell_y + half_cell
+
+    #         if particles.ndim == 1:
+    #             particles = particles.unsqueeze(0)        # safety: (P,3)
+    #         pxs, pys = particles[:, 0].unsqueeze(1), particles[:, 1].unsqueeze(1)  # (P,1)
+
+    #         # broadcast comparison → (P,M) boolean mask
+    #         mask = (
+    #             (pxs >= cx_min) & (pxs < cx_max) &
+    #             (pys >= cy_min) & (pys < cy_max)
+    #         )
+
+    #         for c in range(uniq_cells.shape[0]):
+    #             part_mask = mask[:, c]
+    #             if not part_mask.any():
+    #                 continue
+
+    #             top_z = torch.minimum(
+    #                 particles[part_mask, 2].max(),
+    #                 torch.tensor(0.0, device=self.device)
+    #             )
+    #             i_idx = int(uniq_cells[c, 0])
+    #             j_idx = int(uniq_cells[c, 1])
+
+    #             # write back to height-field (round + cast to int)
+    #             self.height_samples[i_idx, j_idx] = int(torch.round(top_z / v_scale).item())
+
+    #             # optional visualisation bookkeeping
+    #             if visualize:
+    #                 vis_positions.append(Gf.Vec3f(cell_x[c].item(),
+    #                                             cell_y[c].item(),
+    #                                             float(self.height_samples[i_idx, j_idx])))
+    #                 vis_proto_idx.append(0)
+
+    #     if visualize and vis_positions:
+    #         if not hasattr(self, "particle_height_point_instancer"):
+    #             self._init_particle_height_instancer()
+
+    #         self.particle_height_point_instancer.CreatePositionsAttr()   \
+    #             .Set(Vt.Vec3fArray(vis_positions))
+    #         self.particle_height_point_instancer.CreateProtoIndicesAttr()\
+    #             .Set(Vt.IntArray(vis_proto_idx))
+
+
     def query_top_particle_positions(self, visualize=False):
         if not self.current_particle_positions:
             return
 
-        positions = []
-        proto_indices = []
-        # Iterate each level and its systems
-        
+        cell_scale  = self.terrain.horizontal_scale
+        border_size = self.terrain.border_size
+        half_cell   = cell_scale / 2.0
+        v_scale     = self.terrain.vertical_scale
+
+        vis_positions, vis_proto_idx = [], []
+
         for lvl, particles in self.current_particle_positions.items():
-            if particles.size == 0:
+            if particles.numel() == 0:
                 continue
-            
+
             env_ids = (self.terrain_levels == lvl).nonzero(as_tuple=False).flatten()
             if env_ids.numel() == 0:
-                continue  # no robots on this level this frame
+                continue
 
-            foot_positions = self.foot_pos.view(self.num_envs, 4, 3)  
-            if env_ids is not None:
-                foot_positions  = foot_positions[env_ids]    
+            # ---------------- foot query grid -----------------------------
+            foot_positions = self.foot_pos.view(self.num_envs, 4, 3)
+            foot_positions = foot_positions[env_ids]          # (N, 4, 3)
             N = foot_positions.shape[0]
-            points = (foot_positions.unsqueeze(2) + self.particle_height_points.view(N, 4, -1, 3)).reshape(N, self._num_particle_height_points, 3)
-            points += self.terrain.border_size
-            points = (points / self.terrain.horizontal_scale).long()
-            px = points[:, :, 0].view(-1)
-            py = points[:, :, 1].view(-1)
-            px = torch.clip(px, 0, self.height_samples.shape[0] - 2)
-            py = torch.clip(py, 0, self.height_samples.shape[1] - 2)
 
-            grid_indices = np.stack([px.cpu().numpy(), py.cpu().numpy()], axis=1)
-            unique_grid_indices = np.unique(grid_indices, axis=0)
-            # Prepare cell boundaries in vectorized form
-            cell_scale = self.terrain.horizontal_scale
-            border_size = self.terrain.border_size
-            half_cell_scale = cell_scale / 2.0
+            points = (
+                foot_positions.unsqueeze(2)                           # (N, 4, 1, 3)
+                + self.particle_height_points.view(N, 4, -1, 3)       # (N, 4, 49, 3)
+            ).reshape(N, self._num_particle_height_points, 3)         # (N, 196, 3)
 
-            cell_x = unique_grid_indices[:, 0] * cell_scale - border_size
-            cell_y = unique_grid_indices[:, 1] * cell_scale - border_size
+            points += border_size
+            points = (points / cell_scale).long()                     # int grid coords
 
-            cell_x_min = cell_x - half_cell_scale
-            cell_x_max = cell_x + half_cell_scale
-            cell_y_min = cell_y - half_cell_scale
-            cell_y_max = cell_y + half_cell_scale
+            px = points[:, :, 0].flatten()
+            py = points[:, :, 1].flatten()
+            px = torch.clamp(px, 0, self.height_samples.shape[0] - 2)
+            py = torch.clamp(py, 0, self.height_samples.shape[1] - 2)
 
-            # Vectorized mask computation
-            particle_x = particles[:, 0].unsqueeze(1)
-            particle_y = particles[:, 1].unsqueeze(1)
+            grid_indices = torch.stack((px, py), dim=1)
+            uniq_cells   = torch.unique(grid_indices, dim=0)          # (M, 2)
 
+            if uniq_cells.numel() == 0:
+                continue
+
+            # convert back to world X/Y centre positions
+            cell_x = uniq_cells[:, 0].float() * cell_scale - border_size
+            cell_y = uniq_cells[:, 1].float() * cell_scale - border_size
+
+            cx_min, cx_max = cell_x - half_cell, cell_x + half_cell
+            cy_min, cy_max = cell_y - half_cell, cell_y + half_cell
+
+            # make sure particles is 2-D
+            if particles.ndim == 1:
+                particles = particles.unsqueeze(0)
+
+            pxs = particles[:, 0].unsqueeze(1)   # (P,1)
+            pys = particles[:, 1].unsqueeze(1)   # (P,1)
+
+            # mask – which particle is inside which cell
             mask = (
-                (particle_x >= cell_x_min) &
-                (particle_x < cell_x_max) &
-                (particle_y >= cell_y_min) &
-                (particle_y < cell_y_max)
+                (pxs >= cx_min) & (pxs < cx_max) &
+                (pys >= cy_min) & (pys < cy_max)
             )
 
-            # Compute top Z in a vectorized manner
-            for idx, (i, j) in enumerate(unique_grid_indices):
-                particle_mask = mask[:, idx]
-                if particle_mask.any():
-                    max_z = particles[particle_mask, 2].max()
-                    top_z = torch.minimum(max_z, torch.tensor(0.0, device=self.device))
-                    self.height_samples[i, j] = int(round((top_z / self.terrain.vertical_scale).item()))
+            for c in range(uniq_cells.shape[0]):
+                part_mask = mask[:, c]
+                if not part_mask.any():
+                    continue
 
+                top_z = torch.minimum(
+                    particles[part_mask, 2].max(),
+                    torch.tensor(0.0, device=self.device)
+                )
+
+                # write into the height-field
+                i_idx = int(uniq_cells[c, 0])
+                j_idx = int(uniq_cells[c, 1])
+                old_val = self.height_samples[i_idx, j_idx].item()
+                new_val = int(torch.round(top_z / v_scale).item())
+                self.height_samples[i_idx, j_idx] = new_val
+
+                # visualisation
                 if visualize:
-                    positions.append(Gf.Vec3f(cell_x[idx].item(), cell_y[idx].item(), float(self.height_samples[i, j])))
-                    proto_indices.append(0)
+                    vis_positions.append(
+                        Gf.Vec3f(cell_x[c].item(), cell_y[c].item(), float(new_val* v_scale))
+                    )
+                    vis_proto_idx.append(0)
 
         if visualize:
             if not hasattr(self, "particle_height_point_instancer"):
                 self._init_particle_height_instancer()
-            positions_array = Vt.Vec3fArray(positions)
-            proto_indices_array = Vt.IntArray(proto_indices)
-            # 5) Assign to the PointInstancer
-            self.particle_height_point_instancer.CreatePositionsAttr().Set(positions_array)
-            self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(proto_indices_array)        
+
+            # Even if list is empty we still update → keeps prim alive
+            self.particle_height_point_instancer.CreatePositionsAttr().Set(
+                Vt.Vec3fArray(vis_positions)
+            )
+            self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(
+                Vt.IntArray(vis_proto_idx)
+            )
 
     def _visualize_height_scans(self):
         # lazy init
@@ -2311,7 +2415,7 @@ class AnymalTerrainTask(RLTask):
 
         px      = self.height_px.flatten()
         py      = self.height_py.flatten()
-        pz = self.measured_heights.flatten()
+        pz      = self.measured_heights.flatten()
         # compute world coords in bulk
         hscale = self.terrain.horizontal_scale
         bsize  = self.terrain.border_size

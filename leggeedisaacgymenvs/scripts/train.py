@@ -199,7 +199,7 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.numEnvs = 1
         cfg.task.env.terrain.numLevels = 10
         cfg.task.env.terrain.numTerrains = 10
-        cfg.task.env.terrain.measureHeights = False
+        cfg.task.env.terrain.measureHeights = True
 
         cfg.task.env.terrain.curriculum = True
         cfg.task.env.terrain.debugHeights = False
