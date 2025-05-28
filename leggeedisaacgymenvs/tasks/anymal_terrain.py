@@ -96,6 +96,7 @@ class AnymalTerrainTask(RLTask):
         self.initial_particle_positions: dict[tuple[int, str], np.ndarray] = {}
         self.current_particle_positions = {}
         self.particle_counts: Dict[Tuple[int, str], int] = {}
+        self._reset_counters: Dict[Tuple[int,str,int], int] = {}
 
         return
 
@@ -187,10 +188,7 @@ class AnymalTerrainTask(RLTask):
         self.measure_heights = self._task_cfg["env"]["terrain"]["measureHeights"]
         self.debug_heights = self._task_cfg["env"]["terrain"]["debugHeights"]
 
-
-        self.base_threshold = 0.2
-        self.thigh_threshold = 0.1
-
+        self.common_step_counter = 0
         self._num_envs = self._task_cfg["env"]["numEnvs"]
 
         self._task_cfg["sim"]["default_physics_material"]["static_friction"] = self._task_cfg["env"]["terrain"][
@@ -206,7 +204,12 @@ class AnymalTerrainTask(RLTask):
         self._task_cfg["sim"]["add_ground_plane"] = False
         self._particle_cfg = self._task_cfg["env"]["terrain"]["particles"]
         self._particle_cfg_original = copy.deepcopy(self._particle_cfg)
-
+        secs_min, secs_max = self._task_cfg["env"]["terrain"]["particles"]["resetIntervalSecs"]
+        self.particle_grid_reset_steps = [
+                    int(secs_min / self.dt + 0.5),
+                    int(secs_max / self.dt + 0.5),
+                ]
+        self.particle_query_interval = int(self._task_cfg["env"]["terrain"]["particles"]["queryIntervalSecs"] / self.dt + 0.5)
         self.terrain = Terrain(self._task_cfg["env"]["terrain"])
         self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float, device=self.device)
         self.bounds = {
@@ -393,7 +396,7 @@ class AnymalTerrainTask(RLTask):
         position = torch.tensor([-self.terrain.border_size, -self.terrain.border_size, 0.0])
         if create_mesh:
             add_terrain_to_stage(stage=self._stage, vertices=vertices, triangles=triangles, position=position)
-        self.height_samples = (
+        self._terrain_height_samples = (
             torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
         )
             
@@ -996,7 +999,6 @@ class AnymalTerrainTask(RLTask):
 
         # initialize some data used later on
         self.up_axis_idx = 2
-        self.common_step_counter = 0
         self.extras = {}
         self.noise_scale_vec = self._get_noise_scale_vec()
         self.commands = torch.zeros(
@@ -1426,6 +1428,16 @@ class AnymalTerrainTask(RLTask):
             if self.randomize_pbd and (self.common_step_counter % self.randomize_pbd_interval == 0):
                 self.randomize_pbd_material()
 
+            for key, remaining in list(self._reset_counters.items()):
+                # If our global step counter has advanced past this grid’s deadline:
+                if self.common_step_counter >= remaining:
+                    lvl, system_name, grid_key = key
+                    self._reset_particle_grid(lvl, system_name, grid_key)
+                    # schedule its next reset:
+                    self._reset_counters[key] = self.common_step_counter + random.randint(
+                    self.particle_grid_reset_steps[0],
+                    self.particle_grid_reset_steps[1],
+                    )
 
             # prepare quantities
             self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])
@@ -1434,9 +1446,12 @@ class AnymalTerrainTask(RLTask):
 
 
             if self.measure_heights:
+                self.height_samples = self._terrain_height_samples.clone()
                 if self._particles_active:
-                    asyncio.ensure_future(self._update_particle_cache())
-                    asyncio.ensure_future(self.query_top_particle_positions(visualize=True))
+                    if (self.common_step_counter % self.particle_query_interval) == 0:
+                        asyncio.get_event_loop().create_task(
+                        self._update_and_query_particles(visualize=True)
+                        )
                 self.get_heights_below_foot()
 
             self.check_termination()
@@ -2155,6 +2170,11 @@ class AnymalTerrainTask(RLTask):
             key = (level, system_name, grid_key)
             self.initial_particle_positions[key] = Vt.Vec3fArray(positions)
             self.particle_counts[key] = count
+            # seed its reset counter:
+            self._reset_counters[key] = self.common_step_counter + random.randint(
+                    self.particle_grid_reset_steps[0],
+                    self.particle_grid_reset_steps[1],
+                    )
             print(f"[INFO] Created {count} Particles at {particle_set_path}")
         else:
             print(f"[INFO] Particle Point Instancer already exists at {particle_set_path}")
@@ -2195,6 +2215,12 @@ class AnymalTerrainTask(RLTask):
         env_ids = (self.env_grid == grid_key).nonzero(as_tuple=False).flatten()
         if env_ids.numel():
             self.reset_idx(env_ids)
+
+    async def _update_and_query_particles(self, visualize=False):
+        # 1) fully update the cache
+        await self._update_particle_cache()
+        # 2) then do the top-particle query
+        await self.query_top_particle_positions(visualize=visualize)
 
     async def _update_particle_cache(self): 
         if not self.particle_instancers_by_level:
@@ -2296,7 +2322,6 @@ class AnymalTerrainTask(RLTask):
                 # write into the height-field
                 i_idx = int(uniq_cells[c, 0])
                 j_idx = int(uniq_cells[c, 1])
-                old_val = self.height_samples[i_idx, j_idx].item()
                 new_val = int(torch.round(top_z / v_scale).item())
                 self.height_samples[i_idx, j_idx] = new_val
 
