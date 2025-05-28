@@ -201,10 +201,11 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.terrain.numTerrains = 10
         cfg.task.env.terrain.measureHeights = True
 
-        cfg.task.env.terrain.curriculum = True
+        cfg.task.env.terrain.curriculum = False
+        cfg.task.env.terrain.flat = False
         cfg.task.env.terrain.debugHeights = False
         cfg.task.env.commands.VelocityCurriculum = False
-        cfg.task.env.terrain.oobActive = True
+        cfg.task.env.terrain.oobActive = False
 
         cfg.task.env.terrain.terrain_types = [
             # {

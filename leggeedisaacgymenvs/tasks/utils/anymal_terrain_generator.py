@@ -19,7 +19,7 @@ class Terrain:
         self.env_width = cfg["mapWidth"]
         terrain_types = self.cfg["terrain_types"]
 
-        if not cfg["curriculum"]:
+        if cfg["flat"]:
             self.env_rows = cfg["numLevels"]
             self.env_cols = cfg["numTerrains"]
         else:
@@ -44,7 +44,7 @@ class Terrain:
         self.env_origins = np.zeros((self.env_rows, self.env_cols, 3))
 
         # Actually build the terrain
-        if cfg["curriculum"]:
+        if not cfg["flat"]:
             self.deformable_curriculum()
         else:
             self.full_flat_terrain()
