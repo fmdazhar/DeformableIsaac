@@ -17,6 +17,8 @@ from omni.isaac.core.utils.stage import get_current_stage
 from omni.isaac.core.utils.torch.rotations import *
 from omni.isaac.core.prims import RigidPrimView
 from omni.isaac.core.prims.soft.particle_system import ParticleSystem
+from omni.isaac.core.prims.soft.particle_system_view import ParticleSystemView
+
 
 from leggeedisaacgymenvs.tasks.base.rl_task import RLTask
 from leggeedisaacgymenvs.robots.articulations.a1 import A1
@@ -86,12 +88,13 @@ class AnymalTerrainTask(RLTask):
         self._start_randomized = False
         # Initialize dictionaries to track created particle systems and materials
         self.created_particle_systems = {}
+        self._particle_system_enabled: dict[str, bool] = {}
         self.created_materials = {}
         self.particle_instancers_by_level = defaultdict(lambda: defaultdict(dict))
         self._terrains_by_level = {}  # dictionary: level -> (tensor of row indices)
         self._particle_rows_by_level: Dict[int, List[int]] = {}
+        
         self.total_particles = 0    # Initialize a counter for total particles
-        # track which terrain *levels* already have their particle assets in USD
         self._instantiated_particle_levels: set[int] = set()
         self.initial_particle_positions: dict[tuple[int, str], np.ndarray] = {}
         self.current_particle_positions = {}
@@ -399,6 +402,7 @@ class AnymalTerrainTask(RLTask):
         self._terrain_height_samples = (
             torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
         )
+        self.height_samples = self._terrain_height_samples.clone()
             
     def _clear_tracking_history(self, envs: torch.Tensor) -> None:
         self.tracking_lin_vel_x_history[envs]  = 0.0
@@ -531,36 +535,43 @@ class AnymalTerrainTask(RLTask):
         if not self.init_done or not self.curriculum or self.flat:
             # do not change on initial reset
             return
-
-        current_max = self.unlocked_levels[env_ids].max() 
-        at_cap    = self.terrain_levels[env_ids] == current_max
-        if not self.oob_active:
-            root_pos, _ = self._anymals.get_world_poses(clone=False)
-            distance = torch.norm(root_pos[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
-            cond = distance > self.terrain.env_length / 2
-        else: 
-            cond = self.oob[env_ids]
-        mask = at_cap & cond
-        valid_envs = env_ids[mask]
-
-        self.unlocked_levels[valid_envs] = torch.clamp(
-        self.unlocked_levels[valid_envs] + 1,
-        max=self.max_terrain_level
-        )
         
-        # Resample the target terrain level
-        span = self.unlocked_levels[env_ids] - self.min_terrain_level  
-        u = torch.rand_like(span, dtype=torch.float)
-        power = self.terrain_curriculum_cfg["power"]
-        offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
-        new_targets = offset + self.min_terrain_level
-        self.terrain_levels[env_ids] = new_targets
+        #testing
+        self.terrain_levels[env_ids] += 1
+        # Robots that solve the last level are sent to a random one
+        self.terrain_levels[env_ids] = torch.where(
+        self.terrain_levels[env_ids] > self.max_terrain_level,
+        torch.tensor(self.min_terrain_level, device=self.device),
+        self.terrain_levels[env_ids]
+        )
 
-      
+        # current_max = self.unlocked_levels[env_ids].max() 
+        # at_cap    = self.terrain_levels[env_ids] == current_max
+        # if not self.oob_active:
+        #     root_pos, _ = self._anymals.get_world_poses(clone=False)
+        #     distance = torch.norm(root_pos[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
+        #     cond = distance > self.terrain.env_length / 2
+        # else: 
+        #     cond = self.oob[env_ids]
+        # mask = at_cap & cond
+        # valid_envs = env_ids[mask]
+
+        # self.unlocked_levels[valid_envs] = torch.clamp(
+        # self.unlocked_levels[valid_envs] + 1,
+        # max=self.max_terrain_level
+        # )
+        
+        # # Resample the target terrain level
+        # span = self.unlocked_levels[env_ids] - self.min_terrain_level  
+        # u = torch.rand_like(span, dtype=torch.float)
+        # power = self.terrain_curriculum_cfg["power"]
+        # offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
+        # new_targets = offset + self.min_terrain_level
+        # self.terrain_levels[env_ids] = new_targets
+
     def _assign_terrain_blocks(self, env_ids):
         unique_levels, inverse_idx = torch.unique(self.terrain_levels[env_ids], return_inverse=True)
         for i, lvl in enumerate(unique_levels):
-            self.create_particle_systems(int(lvl))
             # Get which envs in env_ids map to this terrain level
             group = env_ids[inverse_idx == i]
             if group.numel() == 0:
@@ -586,6 +597,12 @@ class AnymalTerrainTask(RLTask):
         self.set_compliance(env_ids)
         self.store_pbd_params(env_ids) 
 
+        active_sids = torch.unique(self.system_idx[group])    # e.g.  tensor([0, 1, 3, …])
+        for sid in active_sids:
+            sid = int(sid.item())
+            if sid > 0 and not self._particle_system_enabled.get(f"system{sid}", True):
+                self._enable_particle_system(f"system{sid}")
+
     def set_up_scene(self, scene) -> None:
         self._stage = get_current_stage()
         simulation_context = SimulationContext.instance()
@@ -597,8 +614,10 @@ class AnymalTerrainTask(RLTask):
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
-        # if self._particles_active:
-        #     self.create_particle_systems()
+        if self._particles_active:
+            self.create_particle_systems()
+            self.particle_system_view = ParticleSystemView(prim_paths_expr="/World/particleSystem/*")
+            scene.add(self.particle_system_view)
 
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
@@ -622,11 +641,16 @@ class AnymalTerrainTask(RLTask):
             scene.remove_object("foot_view", registry_only=True)
         if scene.object_exists("calf_view"):
             scene.remove_object("calf_view", registry_only=True)
+        if scene.object_exists("particle_system_view"):
+            scene.remove_object("particle_system_view", registry_only=True)
 
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
-
+        if self._particles_active:
+            self.create_particle_systems()
+            self.particle_system_view = ParticleSystemView(prim_paths_expr="/World/particleSystem/*")
+            scene.add(self.particle_system_view)
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
         scene.add(self._anymals._base)
@@ -653,23 +677,23 @@ class AnymalTerrainTask(RLTask):
             if particle_rows:
                 self._particle_rows_by_level[int(lvl)] = particle_rows
         
-        # H, W = self.height_samples.shape                # HF size
-        # self._depression_cell_mask = {}                 # level ➜ Bool[H*W]
-        # for lvl, rows in self._particle_rows_by_level.items():
-        #     if not rows:                                # no depressions on this level
-        #         continue
-        #     td = self.terrain_details[rows]             # (N_dep, 14)
-        #     mask = torch.zeros(H * W, dtype=torch.bool, device=self.device)
+        H, W = self.height_samples.shape                # HF size
+        self._depression_cell_mask = {}                 # level ➜ Bool[H*W]
+        for lvl, rows in self._particle_rows_by_level.items():
+            if not rows:                                # no depressions on this level
+                continue
+            td = self.terrain_details[rows]             # (N_dep, 14)
+            mask = torch.zeros(H * W, dtype=torch.bool, device=self.device)
 
-        #     for bx0, bx1, by0, by1 in td[:, 10:14].long():
-        #         # mark the flat indices that belong to this depression
-        #         cols = torch.arange(by0, by1 + 1, device=self.device)
-        #         rows_ = torch.arange(bx0, bx1 + 1, device=self.device)
-        #         grid_x, grid_y = torch.meshgrid(rows_, cols, indexing="ij")
-        #         lin = grid_x * W + grid_y
-        #         mask[lin.flatten()] = True
+            for bx0, bx1, by0, by1 in td[:, 10:14].long():
+                # mark the flat indices that belong to this depression
+                cols = torch.arange(by0, by1 + 1, device=self.device)
+                rows_ = torch.arange(bx0, bx1 + 1, device=self.device)
+                grid_x, grid_y = torch.meshgrid(rows_, cols, indexing="ij")
+                lin = grid_x * W + grid_y
+                mask[lin.flatten()] = True
 
-        #     self._depression_cell_mask[int(lvl)] = mask
+            self._depression_cell_mask[int(lvl)] = mask
 
 
     def get_anymal(self):
@@ -1877,7 +1901,7 @@ class AnymalTerrainTask(RLTask):
                     
                     particle_system = ParticleSystem(
                         prim_path=particle_system_path,
-                        particle_system_enabled=True,
+                        particle_system_enabled=False,
                         simulation_owner="/physicsScene",
                         rest_offset=self._particle_cfg[system_name].get("particle_system_rest_offset", None),
                         contact_offset=self._particle_cfg[system_name].get("particle_system_contact_offset", None),
@@ -1910,6 +1934,7 @@ class AnymalTerrainTask(RLTask):
 
                     print(f"[INFO] Created Particle System: {particle_system_path}")
                 self.created_particle_systems[system_name] = particle_system_path
+                self._particle_system_enabled[system_name] = False
 
             # **Create PBD Material if not already created**
             if material_key not in self.created_materials:
@@ -1921,6 +1946,17 @@ class AnymalTerrainTask(RLTask):
         print(f"[INFO] Created {len(self.created_materials)} PBD Materials.")
         print(f"[INFO] Created {self.total_particles} Particles.")
 
+    def _enable_particle_system(self, system_name: str):
+        """Switch a particle system on if it is still disabled."""
+        if self._particle_system_enabled.get(system_name, True):
+            return                                    # already enabled
+        particle_system_path = self.created_particle_systems[system_name]
+        ps_api = PhysxSchema.PhysxParticleSystem.Get(
+            self._stage, Sdf.Path(particle_system_path)
+        )
+        if ps_api:
+            ps_api.GetParticleSystemEnabledAttr().Set(True)
+            self._particle_system_enabled[system_name] = True
 
     def create_pbd_material(self, system_name):
         # Retrieve material parameters from config based on system_name
@@ -2169,7 +2205,6 @@ class AnymalTerrainTask(RLTask):
             grid_key,
             self._particle_cfg[system_name]["particle_grid_particle_mass"],
             self._particle_cfg[system_name]["particle_grid_density"])
-
             # reference the particle set in the sampling api
             sampling_api.CreateParticlesRel().AddTarget(particle_set_path)
 
@@ -2249,8 +2284,13 @@ class AnymalTerrainTask(RLTask):
                     prim = self._stage.GetPrimAtPath(inst_path)
                     if not prim.IsValid():
                         continue
-                    inst = UsdGeom.Points.Get(self._stage, prim.GetPath())
-                    vt_arr = inst.GetPointsAttr().Get() or Vt.Vec3fArray()
+                    if prim.IsA(UsdGeom.PointInstancer):
+                        instancer = UsdGeom.PointInstancer(prim)
+                        vt_arr = instancer.GetPositionsAttr().Get() or Vt.Vec3fArray()
+                    else:
+                        inst_points = UsdGeom.Points(prim)
+                        vt_arr = inst_points.GetPointsAttr().Get() or Vt.Vec3fArray()
+
                     if len(vt_arr) == 0:
                         continue
                     pts = torch.tensor(vt_arr, dtype=torch.float32, device=self.device)
