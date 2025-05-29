@@ -560,7 +560,7 @@ class AnymalTerrainTask(RLTask):
     def _assign_terrain_blocks(self, env_ids):
         unique_levels, inverse_idx = torch.unique(self.terrain_levels[env_ids], return_inverse=True)
         for i, lvl in enumerate(unique_levels):
-            # self.create_particle_systems(int(lvl))
+            self.create_particle_systems(int(lvl))
             # Get which envs in env_ids map to this terrain level
             group = env_ids[inverse_idx == i]
             if group.numel() == 0:
@@ -597,8 +597,8 @@ class AnymalTerrainTask(RLTask):
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
-        if self._particles_active:
-            self.create_particle_systems()
+        # if self._particles_active:
+        #     self.create_particle_systems()
 
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
@@ -648,11 +648,28 @@ class AnymalTerrainTask(RLTask):
             mask = (levels == lvl)
             row_indices = torch.nonzero(mask, as_tuple=False).flatten()
             self._terrains_by_level[lvl.item()] = row_indices
-            
             particle_mask = has_particles & (levels == lvl)
             particle_rows = torch.nonzero(particle_mask, as_tuple=False).flatten().tolist()
             if particle_rows:
                 self._particle_rows_by_level[int(lvl)] = particle_rows
+        
+        # H, W = self.height_samples.shape                # HF size
+        # self._depression_cell_mask = {}                 # level ➜ Bool[H*W]
+        # for lvl, rows in self._particle_rows_by_level.items():
+        #     if not rows:                                # no depressions on this level
+        #         continue
+        #     td = self.terrain_details[rows]             # (N_dep, 14)
+        #     mask = torch.zeros(H * W, dtype=torch.bool, device=self.device)
+
+        #     for bx0, bx1, by0, by1 in td[:, 10:14].long():
+        #         # mark the flat indices that belong to this depression
+        #         cols = torch.arange(by0, by1 + 1, device=self.device)
+        #         rows_ = torch.arange(bx0, bx1 + 1, device=self.device)
+        #         grid_x, grid_y = torch.meshgrid(rows_, cols, indexing="ij")
+        #         lin = grid_x * W + grid_y
+        #         mask[lin.flatten()] = True
+
+        #     self._depression_cell_mask[int(lvl)] = mask
 
 
     def get_anymal(self):
@@ -2141,7 +2158,6 @@ class AnymalTerrainTask(RLTask):
             sampling_api.CreateMaxSamplesAttr().Set(5e5)
             sampling_api.CreateVolumeAttr().Set(True)  # Set to True if sampling volume, False for surface
             cube_mesh.CreateVisibilityAttr("invisible")
-
 
             points = UsdGeom.Points.Define(self._stage, particle_set_path)
             points.CreateDisplayColorAttr().Set(Vt.Vec3fArray([Gf.Vec3f(71.0 / 255.0, 125.0 / 255.0, 1.0)]))
