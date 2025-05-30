@@ -1026,3 +1026,106 @@ from omni.isaac.core.prims import XFormPrim - - from isaacsim.core.prims import 
                     #     self._reset_particle_grid(lvl, system_name, grid_key)
                     #     init_pos = self.initial_particle_positions[(lvl, system_name, grid_key)]
                     #     pts      = torch.tensor(init_pos, dtype=torch.float32, device=self.device)
+
+
+
+
+
+
+    # async def query_top_particle_positions(self, visualize=False):
+    #     if not self.current_particle_positions:
+    #         return
+
+    #     cell_scale  = self.terrain.horizontal_scale
+    #     border_size = self.terrain.border_size
+    #     half_cell   = cell_scale / 2.0
+    #     v_scale     = self.terrain.vertical_scale
+
+    #     vis_positions, vis_proto_idx = [], []
+
+    #     for lvl, particles in self.current_particle_positions.items():
+    #         if particles.numel() == 0:
+    #             continue
+
+    #         env_ids = (self.terrain_levels == lvl).nonzero(as_tuple=False).flatten()
+    #         if env_ids.numel() == 0:
+    #             continue
+
+    #         # ---------------- foot query grid -----------------------------
+    #         foot_positions = self.foot_pos.view(self.num_envs, 4, 3)
+    #         foot_positions = foot_positions[env_ids]          # (N, 4, 3)
+    #         N = foot_positions.shape[0]
+
+    #         points = (
+    #             foot_positions.unsqueeze(2)                           # (N, 4, 1, 3)
+    #             + self.particle_height_points.view(N, 4, -1, 3)       # (N, 4, 49, 3)
+    #         ).reshape(N, self._num_particle_height_points, 3)         # (N, 196, 3)
+
+    #         points += border_size
+    #         points = (points / cell_scale).long()                     # int grid coords
+
+    #         px = points[:, :, 0].flatten()
+    #         py = points[:, :, 1].flatten()
+    #         px = torch.clamp(px, 0, self.height_samples.shape[0] - 2)
+    #         py = torch.clamp(py, 0, self.height_samples.shape[1] - 2)
+
+    #         grid_indices = torch.stack((px, py), dim=1)
+    #         uniq_cells   = torch.unique(grid_indices, dim=0)          # (M, 2)
+
+    #         if uniq_cells.numel() == 0:
+    #             continue
+
+    #         # convert back to world X/Y centre positions
+    #         cell_x = uniq_cells[:, 0].float() * cell_scale - border_size
+    #         cell_y = uniq_cells[:, 1].float() * cell_scale - border_size
+
+    #         cx_min, cx_max = cell_x - half_cell, cell_x + half_cell
+    #         cy_min, cy_max = cell_y - half_cell, cell_y + half_cell
+
+    #         # make sure particles is 2-D
+    #         if particles.ndim == 1:
+    #             particles = particles.unsqueeze(0)
+
+    #         pxs = particles[:, 0].unsqueeze(1)   # (P,1)
+    #         pys = particles[:, 1].unsqueeze(1)   # (P,1)
+
+    #         # mask – which particle is inside which cell
+    #         mask = (
+    #             (pxs >= cx_min) & (pxs < cx_max) &
+    #             (pys >= cy_min) & (pys < cy_max)
+    #         )
+
+    #         for c in range(uniq_cells.shape[0]):
+    #             part_mask = mask[:, c]
+    #             if not part_mask.any():
+    #                 continue
+
+    #             top_z = torch.minimum(
+    #                 particles[part_mask, 2].max(),
+    #                 torch.tensor(0.0, device=self.device)
+    #             )
+
+    #             # write into the height-field
+    #             i_idx = int(uniq_cells[c, 0])
+    #             j_idx = int(uniq_cells[c, 1])
+    #             new_val = int(torch.round(top_z / v_scale).item())
+    #             self.height_samples[i_idx, j_idx] = new_val
+
+    #             # visualisation
+    #             if visualize:
+    #                 vis_positions.append(
+    #                     Gf.Vec3f(cell_x[c].item(), cell_y[c].item(), float(new_val* v_scale))
+    #                 )
+    #                 vis_proto_idx.append(0)
+
+    #     if visualize:
+    #         if not hasattr(self, "particle_height_point_instancer"):
+    #             self._init_particle_height_instancer()
+
+    #         # Even if list is empty we still update → keeps prim alive
+    #         self.particle_height_point_instancer.CreatePositionsAttr().Set(
+    #             Vt.Vec3fArray(vis_positions)
+    #         )
+    #         self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(
+    #             Vt.IntArray(vis_proto_idx)
+    #         )

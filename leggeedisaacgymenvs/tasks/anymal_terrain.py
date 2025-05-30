@@ -213,6 +213,7 @@ class AnymalTerrainTask(RLTask):
                     int(secs_max / self.dt + 0.5),
                 ]
         self.particle_query_interval = int(self._task_cfg["env"]["terrain"]["particles"]["queryIntervalSecs"] / self.dt + 0.5)
+        self.fake_heights = self._task_cfg["env"]["terrain"]["particles"].get("fakeHeights", False)
         self.terrain = Terrain(self._task_cfg["env"]["terrain"])
         self.terrain_details = torch.tensor(self.terrain.terrain_details, dtype=torch.float, device=self.device)
         self.bounds = {
@@ -2268,6 +2269,10 @@ class AnymalTerrainTask(RLTask):
             self.reset_idx(env_ids)
 
     async def _update_and_query_particles(self, visualize=False):
+        if self.fake_heights:
+            await self.query_top_particle_positions(visualize=visualize)
+            return
+
         # 1) fully update the cache
         await self._update_particle_cache()
         # 2) then do the top-particle query
@@ -2301,104 +2306,100 @@ class AnymalTerrainTask(RLTask):
             else torch.empty((0, 3), dtype=torch.float32, device=self.device)
         )
 
-
     async def query_top_particle_positions(self, visualize=False):
-        if not self.current_particle_positions:
-            return
-
+        """
+        For each terrain level, find and (optionally) visualize all particles
+        that lie within any depression cell on that level, as defined by
+        self._depression_cell_mask[level].
+        """
         cell_scale  = self.terrain.horizontal_scale
         border_size = self.terrain.border_size
-        half_cell   = cell_scale / 2.0
         v_scale     = self.terrain.vertical_scale
-
+        H, W        = self.height_samples.shape
         vis_positions, vis_proto_idx = [], []
+
+        if self.fake_heights:
+            # iterate levels ➔ each depressed cell, sample from N(-2.12,1.82):
+            for lvl, mask in self._depression_cell_mask.items():
+                depressed_cells = torch.nonzero(mask, as_tuple=False).view(-1)
+                for cell in depressed_cells.tolist():
+                    h_val = int(round(random.gauss(-2.12, 1.82)))
+                    h_val = max(-10, min(0, h_val))
+                    i = cell // W
+                    j = cell % W
+                    self.height_samples[i, j] = h_val
+                    if visualize:
+                        # visualize at world coords
+                        wx = i * cell_scale - border_size
+                        wy = j * cell_scale - border_size
+                        wz = h_val * v_scale
+                        vis_positions.append(Gf.Vec3f(wx, wy, wz))
+                        vis_proto_idx.append(0)
+            if visualize:
+                # lazy-init a depression-visualizer instancer if needed
+                if not hasattr(self, "particle_height_point_instancer"):
+                    self._init_particle_height_instancer()
+                self.particle_height_point_instancer.CreatePositionsAttr().Set(Vt.Vec3fArray(vis_positions))
+                self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(Vt.IntArray(vis_proto_idx))
+            return
+
+        if not self.current_particle_positions:
+            return
 
         for lvl, particles in self.current_particle_positions.items():
             if particles.numel() == 0:
                 continue
 
-            env_ids = (self.terrain_levels == lvl).nonzero(as_tuple=False).flatten()
-            if env_ids.numel() == 0:
+            # Convert world (x,y) → integer grid coords
+            px = ((particles[:, 0] + border_size) / cell_scale).long().clamp(0, H - 1)
+            py = ((particles[:, 1] + border_size) / cell_scale).long().clamp(0, W - 1)
+
+            # Flattened index per particle
+            flat_idx = px * W + py  # shape: (P,)
+
+            # Which cells are depressions?
+            depression_mask = self._depression_cell_mask.get(lvl)
+            if depression_mask is None:
                 continue
 
-            # ---------------- foot query grid -----------------------------
-            foot_positions = self.foot_pos.view(self.num_envs, 4, 3)
-            foot_positions = foot_positions[env_ids]          # (N, 4, 3)
-            N = foot_positions.shape[0]
+            # Get the list of all depressed cell indices (flat)
+            depressed_cells = torch.nonzero(depression_mask, as_tuple=False).view(-1)
 
-            points = (
-                foot_positions.unsqueeze(2)                           # (N, 4, 1, 3)
-                + self.particle_height_points.view(N, 4, -1, 3)       # (N, 4, 49, 3)
-            ).reshape(N, self._num_particle_height_points, 3)         # (N, 196, 3)
-
-            points += border_size
-            points = (points / cell_scale).long()                     # int grid coords
-
-            px = points[:, :, 0].flatten()
-            py = points[:, :, 1].flatten()
-            px = torch.clamp(px, 0, self.height_samples.shape[0] - 2)
-            py = torch.clamp(py, 0, self.height_samples.shape[1] - 2)
-
-            grid_indices = torch.stack((px, py), dim=1)
-            uniq_cells   = torch.unique(grid_indices, dim=0)          # (M, 2)
-
-            if uniq_cells.numel() == 0:
-                continue
-
-            # convert back to world X/Y centre positions
-            cell_x = uniq_cells[:, 0].float() * cell_scale - border_size
-            cell_y = uniq_cells[:, 1].float() * cell_scale - border_size
-
-            cx_min, cx_max = cell_x - half_cell, cell_x + half_cell
-            cy_min, cy_max = cell_y - half_cell, cell_y + half_cell
-
-            # make sure particles is 2-D
-            if particles.ndim == 1:
-                particles = particles.unsqueeze(0)
-
-            pxs = particles[:, 0].unsqueeze(1)   # (P,1)
-            pys = particles[:, 1].unsqueeze(1)   # (P,1)
-
-            # mask – which particle is inside which cell
-            mask = (
-                (pxs >= cx_min) & (pxs < cx_max) &
-                (pys >= cy_min) & (pys < cy_max)
-            )
-
-            for c in range(uniq_cells.shape[0]):
-                part_mask = mask[:, c]
-                if not part_mask.any():
+            for cell in depressed_cells.tolist():
+                # Which particles land in this cell?
+                mask = (flat_idx == cell)
+                if not mask.any():
                     continue
 
-                top_z = torch.minimum(
-                    particles[part_mask, 2].max(),
-                    torch.tensor(0.0, device=self.device)
-                )
+                # Select those particles → take highest z
+                zs = particles[mask, 2]                # shape: (n_i,)
+                top_z = torch.max(zs).item()           # world-z of top-most particle
+                
+                # Convert back to heightfield value (integer grid height)
+                h_val = int(round(top_z / v_scale))
 
-                # write into the height-field
-                i_idx = int(uniq_cells[c, 0])
-                j_idx = int(uniq_cells[c, 1])
-                new_val = int(torch.round(top_z / v_scale).item())
-                self.height_samples[i_idx, j_idx] = new_val
+                # Map flat index → (i,j)
+                i = cell // W
+                j = cell % W
 
-                # visualisation
+                # Update height_samples
+                self.height_samples[i, j] = h_val
+
                 if visualize:
-                    vis_positions.append(
-                        Gf.Vec3f(cell_x[c].item(), cell_y[c].item(), float(new_val* v_scale))
-                    )
+                    # visualize at world coords
+                    wx = i * cell_scale - border_size
+                    wy = j * cell_scale - border_size
+                    wz = h_val * v_scale
+                    vis_positions.append(Gf.Vec3f(wx, wy, wz))
                     vis_proto_idx.append(0)
 
         if visualize:
+            # lazy-init a depression-visualizer instancer if needed
             if not hasattr(self, "particle_height_point_instancer"):
                 self._init_particle_height_instancer()
+            self.particle_height_point_instancer.CreatePositionsAttr().Set(Vt.Vec3fArray(vis_positions))
+            self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(Vt.IntArray(vis_proto_idx))
 
-            # Even if list is empty we still update → keeps prim alive
-            self.particle_height_point_instancer.CreatePositionsAttr().Set(
-                Vt.Vec3fArray(vis_positions)
-            )
-            self.particle_height_point_instancer.CreateProtoIndicesAttr().Set(
-                Vt.IntArray(vis_proto_idx)
-            )
 
     def _visualize_height_scans(self):
         # lazy init

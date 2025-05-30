@@ -33,6 +33,7 @@ algorithm:
   # Update min_policy_std to match the action space (12 values)
   min_policy_std: [0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25, 0.15, 0.25, 0.25]
   use_history_encoding: True
+  history_encoder_learning_rate: 1.0e-3
   dagger_update_freq: 20
   priv_reg_coef_schedual:
   - [0,   0.1, 0, 2000]
@@ -44,4 +45,5 @@ runner:
   num_steps_per_env: 65 #24
   max_iterations: 3000
   save_interval: 500
+  curriculum_log_interval: 10
 

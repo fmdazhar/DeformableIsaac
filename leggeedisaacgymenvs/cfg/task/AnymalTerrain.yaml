@@ -107,6 +107,7 @@ env:
       use_mesh_sampler: True # Use mesh sampler for particle generation
       resetIntervalSecs: [200, 500]
       queryIntervalSecs: 1
+      fakeHeights: True
       system1:
         pbd_material_friction: 0.8 # Friction value for particles
         pbd_material_density: 1500 # Density of particle material (kg/m³)
