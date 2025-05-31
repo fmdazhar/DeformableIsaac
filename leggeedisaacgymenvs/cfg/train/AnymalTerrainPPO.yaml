@@ -13,7 +13,7 @@ policy:
   # Only leg-specific control head remains.
   leg_control_head_hidden_dims: [256, 128]
   priv_encoder_dims: [64, 32, 24] #[128,128] #64, 20
-  scan_encoder_dims: [128, 64, 32] #[128, 64, 32] #[]
+  scan_encoder_dims: [] #[128, 64, 32] #[]
   num_leg_actions: 12
 
 algorithm:

@@ -615,10 +615,20 @@ class AnymalTerrainTask(RLTask):
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
+        # if self._stage.GetPrimAtPath("/World/depressionColliders").IsValid():
+        #     self._depression_colliders_view = RigidPrimView(
+        #     prim_paths_expr="/World/depressionColliders/.*",
+        #     name="depression_colliders_view",
+        #     # if you only need to track collisions, you could set track_contact_forces=True
+        #     track_contact_forces=False
+        #     )
+        #     scene.add(self._depression_colliders_view)
+
         if self._particles_active:
             self.create_particle_systems()
             self.particle_system_view = ParticleSystemView(prim_paths_expr="/World/particleSystem/*")
             scene.add(self.particle_system_view)
+
 
         scene.add(self._anymals)
         scene.add(self._anymals._thigh)
@@ -644,10 +654,20 @@ class AnymalTerrainTask(RLTask):
             scene.remove_object("calf_view", registry_only=True)
         if scene.object_exists("particle_system_view"):
             scene.remove_object("particle_system_view", registry_only=True)
+        # if scene.object_exists("depression_colliders_view"):
+        #     scene.remove_object("depression_colliders_view", registry_only=True)
 
         self._anymals = A1View(
             prim_paths_expr="/World/envs/.*/a1", name="a1_view", track_contact_forces=True
         )
+        # if self._stage.GetPrimAtPath("/World/depressionColliders").IsValid():
+            # self._depression_colliders_view = RigidPrimView(
+            # prim_paths_expr="/World/depressionColliders/.*",
+            # name="depression_colliders_view",
+            # # if you only need to track collisions, you could set track_contact_forces=True
+            # track_contact_forces=False
+            # )
+            # scene.add(self._depression_colliders_view)
         if self._particles_active:
             self.create_particle_systems()
             self.particle_system_view = ParticleSystemView(prim_paths_expr="/World/particleSystem/*")
@@ -1185,10 +1205,11 @@ class AnymalTerrainTask(RLTask):
             self._set_coms(self._anymals._base, env_ids=env_ids)
         if self._task_cfg["env"]["randomizationRanges"]["randomizeFriction"]:
             self._set_friction(self._anymals._foot, env_ids=env_ids)
-
-        if self.vel_curriculum:
-            self._init_command_distribution()
+        
         self._prepare_reward_function()
+        self._assign_terrain_blocks(env_ids)
+        if self.vel_curriculum:
+            self._init_command_distribution()   
 
         # Define maximum length of tracking history
         self.tracking_history_len = self.command_curriculum_cfg["tracking_length"]
@@ -1209,6 +1230,7 @@ class AnymalTerrainTask(RLTask):
         
         self.total_episode_rewards = torch.zeros(self.num_envs, device=self.device)
         self.reset_idx(env_ids)
+        
         self.init_done = True
 
         
@@ -1296,6 +1318,11 @@ class AnymalTerrainTask(RLTask):
             self.extras["episode"]["rew_" + key] = (
                 torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
             )
+        for key in self.episode_sums_raw.keys():
+            self.extras["episode"][key] = (
+                torch.mean(self.episode_sums_raw[key][env_ids]) / self.max_episode_length_s
+            )
+        
         
         total_episode_reward = torch.zeros(self.num_envs, device=self.device)
         for name in self.reward_scales.keys():
@@ -1389,6 +1416,8 @@ class AnymalTerrainTask(RLTask):
         # reset the episode sums
         for key in self.episode_sums.keys():      
             self.episode_sums[key][env_ids] = 0.0
+        for key in self.episode_sums_raw.keys():
+            self.episode_sums_raw[key][env_ids] = 0.0
         self.total_episode_rewards[:] = 0.0
 
         self.last_actions[env_ids] = 0.0
@@ -1565,7 +1594,6 @@ class AnymalTerrainTask(RLTask):
         self.inactive_reward_names = [
             name
             for name in self.all_reward_methods
-            if name not in self.reward_scales
         ]
 
         # prepare list of functions
@@ -1580,6 +1608,7 @@ class AnymalTerrainTask(RLTask):
 
         # 5) Initialize episode_sums _dict_ before populating it
         self.episode_sums = {}
+        self.episode_sums_raw = {}
         # active rewards
         for name in self.reward_scales.keys():
             self.episode_sums[name] = torch.zeros(
@@ -1588,7 +1617,7 @@ class AnymalTerrainTask(RLTask):
 
         # inactive rewards, prefixed
         for name in self.inactive_reward_names:
-            self.episode_sums[name] = torch.zeros(
+            self.episode_sums_raw[name] = torch.zeros(
                 self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
             )
 
@@ -1602,7 +1631,7 @@ class AnymalTerrainTask(RLTask):
         for name in self.inactive_reward_names:
             raw = getattr(self, f"_reward_{name}")()
             # e.g. store in extras or episode_sums:
-            self.episode_sums[name] += raw * self.dt
+            self.episode_sums_raw[name] += raw * self.dt
 
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
@@ -1883,67 +1912,67 @@ class AnymalTerrainTask(RLTask):
             if not rows:
                 continue
 
-        # mark this level done
-        self._instantiated_particle_levels.add(lvl)
+            # mark this level done
+            self._instantiated_particle_levels.add(lvl)
 
-        for i in rows:
-            terrain_row = self.terrain_details[i]
-            row_idx, col_idx = int(terrain_row[2]), int(terrain_row[3])
-            grid_key = int(terrain_row[0]) 
-            # Construct the system name from integer system_id
-            system_id = int(terrain_row[7])                # e.g. 1, 2, ...
-            system_name = f"system{system_id}"     # "system1", "system2", etc.            
-            material_key = f"pbd_material_{system_name}"
-            particle_system_path = f"/World/particleSystem/{system_name}"
+            for i in rows:
+                terrain_row = self.terrain_details[i]
+                row_idx, col_idx = int(terrain_row[2]), int(terrain_row[3])
+                grid_key = int(terrain_row[0]) 
+                # Construct the system name from integer system_id
+                system_id = int(terrain_row[7])                # e.g. 1, 2, ...
+                system_name = f"system{system_id}"     # "system1", "system2", etc.            
+                material_key = f"pbd_material_{system_name}"
+                particle_system_path = f"/World/particleSystem/{system_name}"
 
-            # **Create Particle System if not already created**
-            if system_name not in self.created_particle_systems:
-                if not self._stage.GetPrimAtPath(particle_system_path).IsValid():
-                    
-                    particle_system = ParticleSystem(
-                        prim_path=particle_system_path,
-                        particle_system_enabled=False,
-                        simulation_owner="/physicsScene",
-                        rest_offset=self._particle_cfg[system_name].get("particle_system_rest_offset", None),
-                        contact_offset=self._particle_cfg[system_name].get("particle_system_contact_offset", None),
-                        solid_rest_offset=self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None),
-                        fluid_rest_offset = self._particle_cfg[system_name].get("particle_system_fluid_rest_offset", None),
-                        particle_contact_offset=self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None),
-                        max_velocity=self._particle_cfg[system_name].get("particle_system_max_velocity", None),
-                        max_neighborhood=self._particle_cfg[system_name].get("particle_system_max_neighborhood", None),
-                        solver_position_iteration_count=self._particle_cfg[system_name].get("particle_system_solver_position_iteration_count", None),
-                        enable_ccd=self._particle_cfg[system_name].get("particle_system_enable_ccd", None),
-                        max_depenetration_velocity=self._particle_cfg[system_name].get("particle_system_max_depenetration_velocity", None),
-                    )
-                    if self._particle_cfg[system_name].get("Anisotropy", False):
-                        # apply api and use all defaults
-                        PhysxSchema.PhysxParticleAnisotropyAPI.Apply(particle_system.prim)
-
-                    if self._particle_cfg[system_name].get("Smoothing", False):
-                        # apply api and use all defaults
-                        PhysxSchema.PhysxParticleSmoothingAPI.Apply(particle_system.prim)
-
-                    if self._particle_cfg[system_name].get("Isosurface", False):
-                        # apply api and use all defaults
-                        PhysxSchema.PhysxParticleIsosurfaceAPI.Apply(particle_system.prim)
-                        # tweak anisotropy min, max, and scale to work better with isosurface:
+                # **Create Particle System if not already created**
+                if system_name not in self.created_particle_systems:
+                    if not self._stage.GetPrimAtPath(particle_system_path).IsValid():
+                        
+                        particle_system = ParticleSystem(
+                            prim_path=particle_system_path,
+                            particle_system_enabled=False,
+                            simulation_owner="/physicsScene",
+                            rest_offset=self._particle_cfg[system_name].get("particle_system_rest_offset", None),
+                            contact_offset=self._particle_cfg[system_name].get("particle_system_contact_offset", None),
+                            solid_rest_offset=self._particle_cfg[system_name].get("particle_system_solid_rest_offset", None),
+                            fluid_rest_offset = self._particle_cfg[system_name].get("particle_system_fluid_rest_offset", None),
+                            particle_contact_offset=self._particle_cfg[system_name].get("particle_system_particle_contact_offset", None),
+                            max_velocity=self._particle_cfg[system_name].get("particle_system_max_velocity", None),
+                            max_neighborhood=self._particle_cfg[system_name].get("particle_system_max_neighborhood", None),
+                            solver_position_iteration_count=self._particle_cfg[system_name].get("particle_system_solver_position_iteration_count", None),
+                            enable_ccd=self._particle_cfg[system_name].get("particle_system_enable_ccd", None),
+                            max_depenetration_velocity=self._particle_cfg[system_name].get("particle_system_max_depenetration_velocity", None),
+                        )
                         if self._particle_cfg[system_name].get("Anisotropy", False):
-                            ani_api = PhysxSchema.PhysxParticleAnisotropyAPI.Apply(particle_system.prim)
-                            ani_api.CreateScaleAttr().Set(5.0)
-                            ani_api.CreateMinAttr().Set(1.0)  # avoids gaps in surface
-                            ani_api.CreateMaxAttr().Set(2.0)  # avoids gaps in surface
+                            # apply api and use all defaults
+                            PhysxSchema.PhysxParticleAnisotropyAPI.Apply(particle_system.prim)
 
-                    print(f"[INFO] Created Particle System: {particle_system_path}")
-                self.created_particle_systems[system_name] = particle_system_path
-                self._particle_system_enabled[system_name] = False
+                        if self._particle_cfg[system_name].get("Smoothing", False):
+                            # apply api and use all defaults
+                            PhysxSchema.PhysxParticleSmoothingAPI.Apply(particle_system.prim)
 
-            # **Create PBD Material if not already created**
-            if material_key not in self.created_materials:
-                self.create_pbd_material(system_name)
-                self.created_materials[material_key] = True
+                        if self._particle_cfg[system_name].get("Isosurface", False):
+                            # apply api and use all defaults
+                            PhysxSchema.PhysxParticleIsosurfaceAPI.Apply(particle_system.prim)
+                            # tweak anisotropy min, max, and scale to work better with isosurface:
+                            if self._particle_cfg[system_name].get("Anisotropy", False):
+                                ani_api = PhysxSchema.PhysxParticleAnisotropyAPI.Apply(particle_system.prim)
+                                ani_api.CreateScaleAttr().Set(5.0)
+                                ani_api.CreateMinAttr().Set(1.0)  # avoids gaps in surface
+                                ani_api.CreateMaxAttr().Set(2.0)  # avoids gaps in surface
 
-            # **Create Particle Grid under the existing system**
-            self.create_particle_grid(grid_key, terrain_row, system_name)
+                        print(f"[INFO] Created Particle System: {particle_system_path}")
+                    self.created_particle_systems[system_name] = particle_system_path
+                    self._particle_system_enabled[system_name] = False
+
+                # **Create PBD Material if not already created**
+                if material_key not in self.created_materials:
+                    self.create_pbd_material(system_name)
+                    self.created_materials[material_key] = True
+
+                # **Create Particle Grid under the existing system**
+                self.create_particle_grid(grid_key, terrain_row, system_name)
         print(f"[INFO] Created {len(self.created_materials)} PBD Materials.")
         print(f"[INFO] Created {self.total_particles} Particles.")
 
@@ -2170,8 +2199,8 @@ class AnymalTerrainTask(RLTask):
             physicsUtils.set_or_add_scale_op(
                 cube_mesh, 
                 Gf.Vec3f(
-                    size*0.97, 
-                    size*0.97, 
+                    size, 
+                    size, 
                     depth
                 )
             )
@@ -2244,12 +2273,20 @@ class AnymalTerrainTask(RLTask):
         # 1⃣  Write positions/velocities back to USD
         init_positions = self.initial_particle_positions[key]
         zero_vel = Gf.Vec3f(0.0)
-        UsdGeom.PointInstancer(instancer_prim).GetPositionsAttr().Set(
-            Vt.Vec3fArray(init_positions)
-        )
-        UsdGeom.PointInstancer(instancer_prim).GetVelocitiesAttr().Set(
-            Vt.Vec3fArray([zero_vel] * len(init_positions))
-        )
+        if instancer_prim.IsA(UsdGeom.PointInstancer):
+            UsdGeom.PointInstancer(instancer_prim).GetPositionsAttr().Set(
+                Vt.Vec3fArray(init_positions)
+            )
+            UsdGeom.PointInstancer(instancer_prim).GetVelocitiesAttr().Set(
+                Vt.Vec3fArray([zero_vel] * len(init_positions))
+            )
+        else:
+            UsdGeom.Points(instancer_prim).GetPointsAttr().Set(
+                Vt.Vec3fArray(init_positions)
+            )
+            UsdGeom.Points(instancer_prim).GetVelocitiesAttr().Set(
+                Vt.Vec3fArray([zero_vel] * len(init_positions))
+            )
 
         # 2  Let PhysX recompute mass etc.
         particleUtils.configure_particle_set(
@@ -2514,7 +2551,7 @@ class AnymalTerrainTask(RLTask):
         sphere_geom = UsdGeom.Sphere(stage.GetPrimAtPath(sphere_proto_path))
         sphere_geom.CreateDisplayColorAttr().Set([Gf.Vec3f(0.0, 1.0, 0.0)])  # green for clarity
 
-    def _add_depression_colliders(self, thickness: float = 0.05):
+    def _add_depression_colliders(self):
         for (idx, level, row, col, terrain_type,
             particles, compliant, system,
             depth, size,
@@ -2543,15 +2580,16 @@ class AnymalTerrainTask(RLTask):
                 side_length   = side,
                 height        = height,
                 translate     = centre,
+                thickness = 0.1
             )
 
-    def create_particle_box_collider(self, path, side_length, height, translate, thickness: float = 0.5,):
+    def create_particle_box_collider(self, path, side_length, height, translate, thickness):
         xform = UsdGeom.Xform.Define(self._stage, path)
         xform.MakeInvisible()
         xform_path = xform.GetPath()
         physicsUtils.set_or_add_translate_op(xform, translate=translate)
         cube_width = side_length + 2.0 * thickness
-        offset = side_length * 0.5 + thickness * 0.5
+        offset = (side_length * 0.5) + thickness
         # front and back (+/- x)
         cube = UsdGeom.Cube.Define(self._stage, xform_path.AppendChild("top"))
         cube.CreateSizeAttr().Set(1.0)

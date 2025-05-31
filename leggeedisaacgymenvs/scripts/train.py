@@ -92,7 +92,7 @@ class Trainer:
                     if self.cfg.wandb_activate:
                         log_data = {
                             f"test/episode_sum_{k}": v.mean().item()
-                            for k, v in env._task.episode_sums.items()
+                            for k, v in env._task.episode_sums_raw.items()
                         }
 
                         lin_err = (env._task.base_lin_vel[:, 0] - env._task.commands[:, 0]).cpu()
@@ -205,7 +205,7 @@ def parse_hydra_configs(cfg: DictConfig):
         cfg.task.env.terrain.curriculum = True
         cfg.task.env.terrain.flat = False
         cfg.task.env.terrain.debugHeights = False
-        cfg.task.env.commands.VelocityCurriculum = False
+        cfg.task.env.commands.VelocityCurriculum = True
         cfg.task.env.terrain.oobActive = False
 
         cfg.task.env.terrain.terrain_types = [
@@ -234,11 +234,25 @@ def parse_hydra_configs(cfg: DictConfig):
                 "depth": 0.10,
                 "size": 4,
                 "row_count": 1,
-                "col_count": 2,
-            }
+                "col_count": 1,
+            },
+            # {
+            #     "name": "central_depression_terrain",
+            #     "compliant": True,
+            #     "level": 1,
+            #     "particle_present": True,
+            #     "system": 3,
+            #     "depth": 0.10,
+            #     "size": 4,
+            #     "row_count": 1,
+            #     "col_count": 1,
+            # }
         ]
+
+        cfg.task.env.terrain.particles.resetIntervalSecs = [1,2]
+
         cfg.task.env.learn.addNoise = False
-        cfg.task.env.learn.episodeLength_s = 3
+        cfg.task.env.learn.episodeLength_s = 5
         cfg.task.env.randomizationRanges.randomizeGravity = False
         cfg.task.env.randomizationRanges.randomizeFriction = False
         cfg.task.env.randomizationRanges.randomizeCOM = False

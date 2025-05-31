@@ -59,7 +59,7 @@ def central_depression_terrain(terrain, depression_depth, platform_height, depre
 
     # Set heights for depression and platform
     terrain.height_field_raw[:, :] = platform_height_units
-    terrain.height_field_raw[depression_start_x:depression_end_x, depression_start_y:depression_end_y] = depression_depth_units
+    terrain.height_field_raw[depression_start_x:depression_end_x+ 1, depression_start_y:depression_end_y+ 1] = depression_depth_units
 
     # store the local indices in the subterrain object
     terrain.depression_indices = {
