@@ -49,6 +49,23 @@ class SimConfig:
         # enable scene graph instancing
         carb.settings.get_settings().set("/persistent/omnihydra/useSceneGraphInstancing", True)
 
+        # App
+        carb.settings.get_settings().set("/app/enableDeveloperWarnings", False)
+        carb.settings.get_settings().set("/app/scripting/ignoreWarningDialog", True)
+
+        # UI Console
+        carb.settings.get_settings().set("/exts/omni.kit.window.console/logFilter/verbose", False)
+        carb.settings.get_settings().set("/exts/omni.kit.window.console/logFilter/info", False)
+        carb.settings.get_settings().set("/exts/omni.kit.window.console/logFilter/warning", False)
+        carb.settings.get_settings().set("/exts/omni.kit.window.console/logFilter/error", False)
+        carb.settings.get_settings().set("/exts/omni.kit.window.console/logFilter/fatal", False)
+
+        # Log 
+        carb.settings.get_settings().set("/log/debugConsoleLevel", "Fatal")  # verbose"|"info"|"warning"|"error"|"fatal"
+        carb.settings.get_settings().set("/log/enabled", False)
+        carb.settings.get_settings().set("/log/outputStreamLevel", "Error")
+        carb.settings.get_settings().set("/log/fileLogLevel", "Error")
+
         import omni.ui 
         # Dock floating UIs this might not be needed anymore as extensions dock themselves
         # Method for docking a particular window to a location
