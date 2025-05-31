@@ -6,6 +6,7 @@ import carb
 import copy
 from omni.physx import get_physx_cooking_interface
 import asyncio
+from collections.abc import Sequence
 
 
 from collections import defaultdict
@@ -224,7 +225,7 @@ class AnymalTerrainTask(RLTask):
         self._particles_active = (self.terrain_details[:, 5] > 0).any().item()
         self._compliance_active = (self.terrain_details[:, 6] > 0).any().item()
         
-        if self.priv_pbd_particle:
+        if self.priv_pbd_particle or self.randomize_pbd:
             self.init_pbd()
         else:
             self.pbd_range = None
@@ -296,13 +297,13 @@ class AnymalTerrainTask(RLTask):
         # merge ranges by parameter name
         merged = {}
         self.pbd_by_sys = {}
-        for sys_name, cfg in all_systems_cfg:
+        for sys_name, cfg in all_systems_cfg.items():
             # cfg = systems_cfg.get(sys_name, {})
             if not cfg.get("enabled", False):
                 continue
             local = []
             for param, rng in cfg.items():
-                if not (param.endswith("_range") and isinstance(rng, (list, tuple)) and len(rng) == 2):
+                if not (param.endswith("_range") and isinstance(rng, Sequence) and len(rng) == 2):
                     continue
                 base_param = param[:-6]  # e.g. "pbd_material_friction_range" -> "pbd_material_friction"
                 local.append((base_param, rng))
@@ -341,6 +342,7 @@ class AnymalTerrainTask(RLTask):
         sid: float(self._particle_cfg[f"system{sid}"].get("particle_grid_fluid", False))
         for sid in active_system_ids
         }
+
         
     def _get_noise_scale_vec(self):
 
@@ -980,14 +982,14 @@ class AnymalTerrainTask(RLTask):
             if target_envs.numel() == 0:
                 continue
             # For each parameter we collected in init_pbd for this system:
-            for param_name, _ in self.pbd_by_sys.get(sys_id, []):
+            for param_name, _ in self.pbd_by_sys.get(system_str, []):
                 col = self._pbd_idx[param_name]
                 val = mat_cfg.get(param_name, 0.0)
                 self.pbd_parameters[target_envs, col] = float(val)
 
-            # Finally, handle solid_rest_offset for active systems
-            val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
-            self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
+            # # Finally, handle solid_rest_offset for active systems
+            # val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
+            # self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
 
 
     def randomize_pbd_material(self):
@@ -1016,23 +1018,21 @@ class AnymalTerrainTask(RLTask):
         for s in torch.unique(self.system_idx)
         if int(s.item()) > 0
         }
-
+        active_system_ids = {f"system{s}" for s in active_system_ids}
+        
         # Process each system in the configuration.
-        for sys_id, param_list in self.pbd_by_sys.items():
-            if sys_id not in active_system_ids:
+        for system_name, param_list in self.pbd_by_sys.items():
+            if system_name not in active_system_ids:
                 continue
             # Skip if the system is not in the config.
-            system_name = f"system{sys_id}"
             material_key = f"pbd_material_{system_name}"
             if material_key not in self.created_materials:
-                print(f"[WARN] Material {material_key} not found; skipping randomization.")
                 continue
-
+            
             # Get the material API.
             pbd_material_path = f"/World/pbdmaterial_{system_name}"
             material_api = PhysxSchema.PhysxPBDMaterialAPI.Get(self._stage, pbd_material_path)
             if not material_api:
-                print(f"[ERROR] Could not find PBD material at {pbd_material_path}")
                 continue
 
             # Pre-sample all parameters once for this system.
@@ -1049,8 +1049,10 @@ class AnymalTerrainTask(RLTask):
                 if attr and attr.Get() is not None:
                     attr.Set(sample_val)
                     self._particle_cfg[system_name][param_name] = sample_val
-            print(f"[INFO] Updated PBD material at {pbd_material_path} with randomized parameters.")
-            
+                    # print(f"[INFO][randomize_pbd_material]   ✓ {param_name} set to {sample_val:.6f}")
+            self.store_pbd_params()
+
+
     def post_reset(self):
 
         self.base_init_state = torch.tensor(
@@ -1517,11 +1519,10 @@ class AnymalTerrainTask(RLTask):
 
 
             if self.measure_heights:
-                self.height_samples = self._terrain_height_samples.clone()
                 if self._particles_active:
                     if (self.common_step_counter % self.particle_query_interval) == 0:
                         asyncio.get_event_loop().create_task(
-                        self._update_and_query_particles(visualize=True)
+                        self._update_and_query_particles(visualize=False)
                         )
                 self.get_heights_below_foot()
 
@@ -2349,11 +2350,14 @@ class AnymalTerrainTask(RLTask):
         that lie within any depression cell on that level, as defined by
         self._depression_cell_mask[level].
         """
+        self.height_samples = self._terrain_height_samples.clone()
+
         cell_scale  = self.terrain.horizontal_scale
         border_size = self.terrain.border_size
         v_scale     = self.terrain.vertical_scale
         H, W        = self.height_samples.shape
         vis_positions, vis_proto_idx = [], []
+
 
         if self.fake_heights:
             # iterate levels ➔ each depressed cell, sample from N(-2.12,1.82):

@@ -336,7 +336,7 @@ env:
         damping_multiplier: [0.08, 0.8]
 
       particles:
-        enabled: False
+        enabled: True
         interval: 20
         systems:
           system1: #0.2
