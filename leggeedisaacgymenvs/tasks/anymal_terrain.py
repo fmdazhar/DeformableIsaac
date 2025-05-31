@@ -239,9 +239,8 @@ class AnymalTerrainTask(RLTask):
         self._num_priv = (
             (64 if self.priv_base else 0)
         + (8  if self.priv_compliance else 0)
-        + (self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0)
+        + (self.pbd_parameters.shape[1] if (self.priv_pbd_particle and self.pbd_parameters is not None ) else 0)
         )
-        print(f"Num priv: {self._num_priv}")
     
     def init_pbd(self):
         """
@@ -786,15 +785,15 @@ class AnymalTerrainTask(RLTask):
                                                 requires_grad=False) * (distribution_parameters[1] - distribution_parameters[0]) + distribution_parameters[0]
         masses += self.payloads
         set_masses(masses)
-        print(f"Masses updated: {masses}")
-        print(f"default_inertia: {self.default_inertias}")
+        # print(f"Masses updated: {masses}")
+        # print(f"default_inertia: {self.default_inertias}")
         # Compute the ratios of the new masses to the default masses.
         ratios = masses / self.default_base_masses
         # The default_inertia is scaled by these ratios.
         # Note: The multiplication below assumes broadcasting works correctly for your inertia tensor shape.
         new_inertias = self.default_inertias * ratios.unsqueeze(-1)
         view.set_inertias(new_inertias)
-        print(f"Inertias updated: {new_inertias}")
+        # print(f"Inertias updated: {new_inertias}")
 
     def _set_friction(self ,asset, env_ids, device="cpu"):
         """Update material properties for a given asset."""
@@ -846,17 +845,17 @@ class AnymalTerrainTask(RLTask):
         """Update material properties for a given view."""
 
         coms, ori = view.get_coms()
-        print(f"Current coms: {coms}")
+        # print(f"Current coms: {coms}")
 
         distribution_parameters = self.com_displacement_range
         self.com_displacements[env_ids, :] = torch.rand(len(env_ids), 3, dtype=torch.float, device=self.device,
                                                             requires_grad=False) * ( distribution_parameters[1] - distribution_parameters[0]) + distribution_parameters[0]
-        print(f"Displacements: {self.com_displacements.unsqueeze(1)}")
+        # print(f"Displacements: {self.com_displacements.unsqueeze(1)}")
         coms += self.com_displacements.unsqueeze(1)
         set_coms = view.set_coms
-        print(f"New coms: {coms}")
+        # print(f"New coms: {coms}")
         set_coms(coms, ori)
-        print(f"Coms updated: {coms}")
+        # print(f"Coms updated: {coms}")
 
 
     def set_compliance(self, env_ids=None, sync=False):
@@ -1715,14 +1714,13 @@ class AnymalTerrainTask(RLTask):
             ]
 
         if self.priv_pbd_particle:
-            if self._particles_active:
                 priv_parts.append(
                     (self.pbd_parameters - self.pbd_shift) * self.pbd_scale
                 )
-            elif self.test:
-                pbd_dim = self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0
-                pbd_tensor = torch.zeros(self.num_envs, pbd_dim, device=self.device)
-                priv_parts.append(pbd_tensor)
+            # elif self.test:
+            #     pbd_dim = self.pbd_parameters.shape[1] if self.pbd_parameters is not None else 0
+            #     pbd_tensor = torch.zeros(self.num_envs, pbd_dim, device=self.device)
+            #     priv_parts.append(pbd_tensor)
 
         # finally concatenate all privileged parts (or an empty tensor if none)
         if priv_parts:

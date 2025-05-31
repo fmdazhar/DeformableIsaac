@@ -3,12 +3,12 @@ name: AnymalTerrain
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:4,${...num_envs}}
+  numEnvs: ${resolve_default:1000,${...num_envs}}
   clipObservations: 100
   # clipActions: 5
 
   commands:
-    curriculum_seed: 42
+    curriculum_seed: 0
     VelocityCurriculum: True
     limit_vel_x:     [-3.0, 3.0]
     limit_vel_y:     [-1.0, 1.0]
@@ -321,11 +321,7 @@ env:
 
     priv_base: True
     priv_compliance: True
-    priv_pbd_particle: False
-    priv_pbd_particle_base: False
-    priv_pbd_non_fluid: False
-    priv_pbd_fluid: False
-
+    priv_pbd_particle: True
 
     material_randomization:
       enabled: True
