@@ -1338,7 +1338,7 @@ class AnymalTerrainTask(RLTask):
         self.extras["extras"]["mean_lin_x_reward"] = float(lin_x_rewards.mean().item())
         self.extras["extras"]["mean_ang_x_reward"] = float(ang_x_rewards.mean().item())
         self.extras["extras"]["mean_final_length"] = float(final_lengths.mean().item())
-        self.extras["extras"]["mean_episode_reward"] =  torch.mean(self.total_episode_rewards[env_ids]) / self.max_episode_length_s
+        self.extras["extras"]["mean_episode_reward"] =  torch.mean(self.total_episode_rewards[env_ids]) / durations
 
         # 1. current write positions for every env we’re resetting
         lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
