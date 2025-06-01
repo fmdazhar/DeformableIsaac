@@ -236,7 +236,7 @@ class AnymalTerrainTask(RLTask):
             self.pbd_by_sys = {}
 
         self._num_priv = (
-            (64 if self.priv_base else 0)
+            (52 if self.priv_base else 0)
         + (8  if self.priv_compliance else 0)
         + (self.pbd_parameters.shape[1] if (self.priv_pbd_particle and self.pbd_parameters is not None ) else 0)
         )
@@ -1338,7 +1338,7 @@ class AnymalTerrainTask(RLTask):
         self.extras["extras"]["mean_lin_x_reward"] = float(lin_x_rewards.mean().item())
         self.extras["extras"]["mean_ang_x_reward"] = float(ang_x_rewards.mean().item())
         self.extras["extras"]["mean_final_length"] = float(final_lengths.mean().item())
-        slef.extras["extras"]["mean_episode_reward"] = float(self.total_episode_rewards[env_ids].mean().item())
+        self.extras["extras"]["mean_episode_reward"] =  torch.mean(self.total_episode_rewards[env_ids]) / self.max_episode_length_s
 
         # 1. current write positions for every env we’re resetting
         lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
@@ -1416,7 +1416,7 @@ class AnymalTerrainTask(RLTask):
             self.episode_sums[key][env_ids] = 0.0
         for key in self.episode_sums_raw.keys():
             self.episode_sums_raw[key][env_ids] = 0.0
-        self.total_episode_rewards[:] = 0.0
+        self.total_episode_rewards[env_ids] = 0.0
 
         self.last_actions[env_ids] = 0.0
         self.last_dof_vel[env_ids] = 0.0
@@ -1689,12 +1689,12 @@ class AnymalTerrainTask(RLTask):
                 (self.com_displacements - self.com_shift) * self.com_scale,
                 (motor_strength_flat - self.motor_strength_shift) * self.motor_strength_scale,
             ]
-            # contact normals (unit vectors)  ---------
-            forces = self.foot_contact_forces.view(self.num_envs, self.num_feet, 3) # foot_forces: [N, 4, 3]
-            normals = F.normalize(forces, p=2, dim=-1, eps=1e-8)    # [N,4,3]
-            mask = self.contact_filt.unsqueeze(-1)
-            contact_normals = normals * mask                         # [N,4,3]
-            priv_parts.append(contact_normals.reshape(self.num_envs, -1))
+            # # contact normals (unit vectors)  ---------
+            # forces = self.foot_contact_forces.view(self.num_envs, self.num_feet, 3) # foot_forces: [N, 4, 3]
+            # normals = F.normalize(forces, p=2, dim=-1, eps=1e-8)    # [N,4,3]
+            # mask = self.contact_filt.unsqueeze(-1)
+            # contact_normals = normals * mask                         # [N,4,3]
+            # priv_parts.append(contact_normals.reshape(self.num_envs, -1))
 
             force_components = torch.clamp(
                 self.foot_contact_forces.view(self.num_envs, self.num_feet * 3)
