@@ -42,7 +42,7 @@ algorithm:
 runner:
   policy_class_name: ActorCritic
   algorithm_class_name: PPO
-  num_steps_per_env: 65 #24
+  num_steps_per_env: 62 #24
   max_iterations: 3000
   save_interval: 500
   curriculum_log_interval: 10

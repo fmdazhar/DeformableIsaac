@@ -18,16 +18,16 @@ env:
     ang_vel_yaw:   [-3, 3]
     curriculum_thresholds:
       tracking_length: 1
-      tracking_lin_vel_high: 0.9
-      tracking_lin_vel_low: 0.85
+      tracking_lin_vel_high: 0.90
+      tracking_lin_vel_low: 0.80
       tracking_ang_vel_high: 0.80
-      tracking_ang_vel_low: 0.8
+      tracking_ang_vel_low: 0.7
       tracking_eps_length_high: 0.95
       tracking_eps_length_low: 0.85
       num_bins_vel_x: 21
       num_bins_vel_y: 7
       num_bins_vel_yaw: 21
-
+      delta: 0.2
 
   terrain:
     measureHeights: True
@@ -43,12 +43,20 @@ env:
     curriculum: True  #level-based updates
     curriculum_thresholds:
       power: 0.0
+      tracking_length: 3
+      tracking_lin_vel_high: 0.85
+      tracking_lin_vel_low: 0.80
+      tracking_ang_vel_high: 0.80
+      tracking_ang_vel_low: 0.7
+      tracking_eps_length_high: 0.95
+      tracking_eps_length_low: 0.85
 
-    oobActive: False
+
+    oobActive: True
     oobBuffer: 0.5
     
-    mapLength: 10.
-    mapWidth: 10.
+    mapLength: 12.
+    mapWidth: 12.
     # tri mesh only:
     slopeTreshold: 0.5
 

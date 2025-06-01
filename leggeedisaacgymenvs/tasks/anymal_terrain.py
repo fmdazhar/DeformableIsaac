@@ -77,7 +77,6 @@ class AnymalTerrainTask(RLTask):
 
         if self.measure_heights:
             self.height_points = self.init_height_points()
-            self.particle_height_points = self.init_particle_height_points()
             self.measured_heights = torch.zeros(
                 (self.num_envs, self._num_height_points),
                 dtype=torch.float,
@@ -317,12 +316,12 @@ class AnymalTerrainTask(RLTask):
         self.pbd_param_names = sorted(merged.keys())
         self.pbd_range = [merged[k] for k in self.pbd_param_names]
 
-        # self.pbd_param_names.append("solid_rest_offset")
-        # if sro_vals:
-        #     min_sro, max_sro = min(sro_vals), max(sro_vals)
-        # else:
-        #     min_sro = max_sro = 0.0
-        # self.pbd_range.append([min_sro, max_sro])
+        self.pbd_param_names.append("solid_rest_offset")
+        if sro_vals:
+            min_sro, max_sro = min(sro_vals), max(sro_vals)
+        else:
+            min_sro = max_sro = 0.0
+        self.pbd_range.append([min_sro, max_sro])
 
         self.pbd_param_names += ["particles_present", "fluid_present"]
         self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
@@ -377,23 +376,6 @@ class AnymalTerrainTask(RLTask):
         
         return points 
                                            
-    def init_particle_height_points(self):
-        y = 0.1 * torch.tensor(
-            [-3,-2, -1, 0, 1, 2, 3], device=self.device, requires_grad=False
-        )
-        x = 0.1 * torch.tensor(
-            [-3, -2, -1, 0, 1, 2, 3], device=self.device, requires_grad=False
-        )
-        grid_x, grid_y = torch.meshgrid(x, y, indexing='ij')
-        num_points = grid_x.numel()
-        base = torch.stack([grid_x.flatten(), grid_y.flatten(),
-                        torch.zeros(num_points, device=self.device)], dim=1) 
-        foot_offsets = base.repeat(4, 1)
-        self._num_particle_height_points = foot_offsets.shape[0] 
-        points = foot_offsets.unsqueeze(0).repeat(self.num_envs, 1, 1)        
-        
-        return points
-
     def _create_trimesh(self, create_mesh=True):
         self.terrain_origins = torch.from_numpy(self.terrain.env_origins).float().to(self.device)
         vertices = self.terrain.vertices
@@ -508,7 +490,7 @@ class AnymalTerrainTask(RLTask):
             successes = (mean_lin > high_thr[0]) & (mean_ang > high_thr[1]) & (mean_len > high_thr[2])
             failures  = (mean_lin <  low_thr[0]) & (mean_ang <  low_thr[1]) & (mean_len <  low_thr[2])
             if successes.any():
-                delta = 0.4
+                delta = self.command_curriculum_cfg["delta"]
                 selected_envs = all_envs[successes]                 
                 bin_ids = self.env_command_bins[selected_envs.cpu().numpy()]
                 cur = self.curricula[int(cur_idx)]
@@ -538,38 +520,56 @@ class AnymalTerrainTask(RLTask):
             # do not change on initial reset
             return
         
-        #testing
-        self.terrain_levels[env_ids] += 1
-        # Robots that solve the last level are sent to a random one
-        self.terrain_levels[env_ids] = torch.where(
-        self.terrain_levels[env_ids] > self.max_terrain_level,
-        torch.tensor(self.min_terrain_level, device=self.device),
-        self.terrain_levels[env_ids]
-        )
-
-        # current_max = self.unlocked_levels[env_ids].max() 
-        # at_cap    = self.terrain_levels[env_ids] == current_max
-        # if not self.oob_active:
-        #     root_pos, _ = self._anymals.get_world_poses(clone=False)
-        #     distance = torch.norm(root_pos[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
-        #     cond = distance > self.terrain.env_length / 2
-        # else: 
-        #     cond = self.oob[env_ids]
-        # mask = at_cap & cond
-        # valid_envs = env_ids[mask]
-
-        # self.unlocked_levels[valid_envs] = torch.clamp(
-        # self.unlocked_levels[valid_envs] + 1,
-        # max=self.max_terrain_level
+        # #testing
+        # root_pos, _ = self._anymals.get_world_poses(clone=False)
+        # distance = torch.norm(root_pos[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
+        # cond = distance > self.terrain.env_length / 2
+        # valid_envs  = env_ids[cond] 
+        # self.terrain_levels[valid_envs] += 1
+        # self.terrain_levels[valid_envs] = torch.where(
+        # self.terrain_levels[valid_envs] > self.max_terrain_level,
+        # torch.tensor(self.min_terrain_level, device=self.device),
+        # self.terrain_levels[valid_envs]
         # )
+
+        tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
+        tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
+        tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
         
-        # # Resample the target terrain level
-        # span = self.unlocked_levels[env_ids] - self.min_terrain_level  
-        # u = torch.rand_like(span, dtype=torch.float)
-        # power = self.terrain_curriculum_cfg["power"]
-        # offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
-        # new_targets = offset + self.min_terrain_level
-        # self.terrain_levels[env_ids] = new_targets
+        full_hist  = self.tracking_lin_vel_x_history_full[env_ids] 
+        current_max = self.unlocked_levels[env_ids].max()     
+        at_cap    = self.terrain_levels[env_ids] == current_max
+
+        mask      = at_cap  & full_hist 
+
+        candidate_envs  = env_ids[mask] 
+        if candidate_envs.numel() > 0:
+            lin_mean = self.tracking_lin_vel_x_history[candidate_envs].mean(dim=1)
+            ang_mean = self.tracking_ang_vel_x_history[candidate_envs].mean(dim=1)
+            len_mean = self.ep_length_history[candidate_envs].mean(dim=1)
+
+            cond = (
+                (lin_mean > tracking_lin_vel_high) &
+                (ang_mean > tracking_ang_vel_high) &
+                (len_mean > tracking_episode_length)
+            )
+            promotable_envs = candidate_envs[cond]
+            if promotable_envs.numel() > 0:
+                self.unlocked_levels[promotable_envs] = torch.clamp(
+                    self.unlocked_levels[promotable_envs] + 1,
+                    max=self.max_terrain_level
+                )
+                self._clear_tracking_history(promotable_envs)
+        
+        # Resample the target terrain level
+        span = self.unlocked_levels[env_ids] - self.min_terrain_level  
+        u = torch.rand_like(span, dtype=torch.float)
+        power = self.terrain_curriculum_cfg["power"]
+        offset = torch.floor((span + 1).float() * u.pow(1.0 / (power + 1.0))).long()
+        new_targets = offset + self.min_terrain_level
+        old_levels = self.terrain_levels[env_ids].clone()
+        self.terrain_levels[env_ids] = new_targets
+
 
     def _assign_terrain_blocks(self, env_ids):
         unique_levels, inverse_idx = torch.unique(self.terrain_levels[env_ids], return_inverse=True)
@@ -986,9 +986,9 @@ class AnymalTerrainTask(RLTask):
                 val = mat_cfg.get(param_name, 0.0)
                 self.pbd_parameters[target_envs, col] = float(val)
 
-            # # Finally, handle solid_rest_offset for active systems
-            # val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
-            # self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
+            # Finally, handle solid_rest_offset for active systems
+            val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
+            self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
 
 
     def randomize_pbd_material(self):
@@ -1213,7 +1213,7 @@ class AnymalTerrainTask(RLTask):
             self._init_command_distribution()   
 
         # Define maximum length of tracking history
-        self.tracking_history_len = self.command_curriculum_cfg["tracking_length"]
+        self.tracking_history_len = self.terrain_curriculum_cfg["tracking_length"]
         # Initialize linear velocity tracking buffer and index for each env
         self.tracking_lin_vel_x_history = torch.zeros((self.num_envs, self.tracking_history_len), device=self.device)
         self.tracking_lin_vel_x_history_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -1285,8 +1285,8 @@ class AnymalTerrainTask(RLTask):
         self.base_pos[env_ids, 1] += rand_y
 
         orient_ranges = torch.tensor([
-            [-0.5,  0.5],    # roll
-            [-0.5,  0.5],    # pitch
+            [-0.0,  0.0],    # roll
+            [-0.0,  0.0],    # pitch
             [-3.14, 3.14],   # yaw
         ], device=self.device)  # (3, 2)
         rpy = sample_uniform(
@@ -1323,11 +1323,6 @@ class AnymalTerrainTask(RLTask):
             self.extras["episode"][key] = (
                 torch.mean(self.episode_sums_raw[key][env_ids]) / self.max_episode_length_s
             )
-        
-        
-        total_episode_reward = torch.zeros(self.num_envs, device=self.device)
-        for name in self.reward_scales.keys():
-            total_episode_reward += self.episode_sums[name]
 
         steps     = self.progress_buf[env_ids].clamp(min=1)            # number of physics steps
         durations = steps * self.dt                               # actual seconds elapsed
@@ -1340,6 +1335,11 @@ class AnymalTerrainTask(RLTask):
             full_len,                                         # → 1.0 ·· when reset was a timeout / OOB
             self.progress_buf[env_ids].float() / self.max_episode_length  # → fractional length otherwise
         )
+        self.extras["extras"]["mean_lin_x_reward"] = float(lin_x_rewards.mean().item())
+        self.extras["extras"]["mean_ang_x_reward"] = float(ang_x_rewards.mean().item())
+        self.extras["extras"]["mean_final_length"] = float(final_lengths.mean().item())
+        slef.extras["extras"]["mean_episode_reward"] = float(self.total_episode_rewards[env_ids].mean().item())
+
         # 1. current write positions for every env we’re resetting
         lin_pos = self.tracking_lin_vel_x_history_idx[env_ids] % self.tracking_history_len
         ang_pos = self.tracking_ang_vel_x_history_idx[env_ids] % self.tracking_history_len
@@ -1364,7 +1364,7 @@ class AnymalTerrainTask(RLTask):
         self.extras["extras"]["min_action"] = torch.min(self.actions)
         self.extras["extras"]["max_action"] = torch.max(self.actions)
         if self.oob is not None and self.oob.numel() > 0:
-            self.extras["extras"]["oob_ratio"] = float(self.oob.float().mean().item())
+            self.extras["extras"]["oob_ratio"] = float(self.oob[env_ids].float().mean().item())
 
     def handle_logs_2(self, env_ids): 
         if self.curriculum:
@@ -1380,10 +1380,7 @@ class AnymalTerrainTask(RLTask):
             for t in unique_types:
                 cnt = int((self.terrain_types == t).sum().item())
                 self.extras["extras"][f"num_robots_type_{int(t.item())}"] = cnt
-                mask = (self.terrain_types == t)
-                if mask.any():
-                    avg = torch.mean(self.total_episode_rewards[mask])/ self.max_episode_length_s
-                    self.extras["extras"][f"avg_episode_reward_type_{int(t)}"] = avg  
+
             for lvl, pts in self.current_particle_positions.items():
                 count = pts.shape[0]
                 self.extras["extras"][f"num_particles_level_{int(lvl)}"] = count
@@ -1410,9 +1407,9 @@ class AnymalTerrainTask(RLTask):
                 self.extras["extras"][f"terrain_{int(t.item())}/max_cmd_y_vel"]= max_y
                 self.extras["extras"][f"terrain_{int(t.item())}/max_cmd_yaw_vel"]= max_yaw
         
-                self.extras["episode"][f"terrain_{int(t.item())}/min_cmd_x_vel"]= min_x
-                self.extras["episode"][f"terrain_{int(t.item())}/min_cmd_y_vel"]= min_y
-                self.extras["episode"][f"terrain_{int(t.item())}/min_cmd_yaw_vel"]= min_yaw
+                self.extras["extras"][f"terrain_{int(t.item())}/min_cmd_x_vel"]= min_x
+                self.extras["extras"][f"terrain_{int(t.item())}/min_cmd_y_vel"]= min_y
+                self.extras["extras"][f"terrain_{int(t.item())}/min_cmd_yaw_vel"]= min_yaw
             
         # reset the episode sums
         for key in self.episode_sums.keys():      
