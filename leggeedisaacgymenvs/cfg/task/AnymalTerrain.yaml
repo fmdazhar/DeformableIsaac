@@ -18,7 +18,7 @@ env:
     ang_vel_yaw:   [-3, 3]
     curriculum_thresholds:
       tracking_length: 1
-      tracking_lin_vel_high: 0.90
+      tracking_lin_vel_high: 0.85
       tracking_lin_vel_low: 0.80
       tracking_ang_vel_high: 0.80
       tracking_ang_vel_low: 0.7
@@ -27,7 +27,7 @@ env:
       num_bins_vel_x: 21
       num_bins_vel_y: 7
       num_bins_vel_yaw: 21
-      delta: 0.2
+      delta: 0.5
 
   terrain:
     measureHeights: True
@@ -43,7 +43,7 @@ env:
     curriculum: True  #level-based updates
     curriculum_thresholds:
       power: 0.0
-      tracking_length: 3
+      tracking_length: 2
       tracking_lin_vel_high: 0.85
       tracking_lin_vel_low: 0.80
       tracking_ang_vel_high: 0.80
@@ -299,10 +299,10 @@ env:
 
     #randomization
     pushEnabled: True
-    pushInterval_s: 15
+    pushInterval_s: 7
 
     # episode length in seconds
-    episodeLength_s: 20
+    episodeLength_s: 10 #20
 
   randomizationRanges:
     randomizeEpisodeStart: True

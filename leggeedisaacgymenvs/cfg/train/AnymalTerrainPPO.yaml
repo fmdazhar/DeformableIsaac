@@ -20,7 +20,7 @@ algorithm:
   value_loss_coef: 1.0
   use_clipped_value_loss: True
   clip_param: 0.2
-  entropy_coef: 0.005 #0.01
+  entropy_coef: 0.006 #0.01
   num_learning_epochs: 7
   num_mini_batches: 2
   learning_rate: 1.0e-3 #7.e-4 #1.0e-3 #1.0e-3 #3.e-4  #5.e-4
