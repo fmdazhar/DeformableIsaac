@@ -515,7 +515,6 @@ class AnymalTerrainTask(RLTask):
 
     def update_terrain_level(self, env_ids):
 
-        # if not self.init_done or not self.curriculum or self.test:
         if not self.init_done or not self.curriculum or self.flat:
             # do not change on initial reset
             return
@@ -1311,6 +1310,7 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_joint_velocities(velocities=self.dof_vel[env_ids].clone(), indices=indices)
 
 
+
     def handle_logs(self, env_ids):
         # fill extras
         self.extras["episode"] = {}
@@ -1543,7 +1543,10 @@ class AnymalTerrainTask(RLTask):
         self._anymals.set_velocities(self.base_velocities)
 
     def check_termination(self):
-        self.reset_buf = torch.norm(self.base_contact_forces, dim=1) > 1.0
+        fresh = self.progress_buf <= 5
+        contact_norms = torch.norm(self.base_contact_forces, dim=1) > 1.0
+        self.reset_buf = contact_norms & ~ fresh  # reset if contact forces are too high, but not in the first 3 steps
+
         if self.oob_active and not self.flat:
             # Convert each robot's base (x,y) position into heightfield indices
             hf_x = (self.base_pos[:, 0] + self.terrain.border_size) / self.terrain.horizontal_scale

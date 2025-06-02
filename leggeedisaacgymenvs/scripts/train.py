@@ -213,7 +213,7 @@ def parse_hydra_configs(cfg: DictConfig):
                 "name": "flat",
                 "particle_present": False,
                 "compliant": False,
-                "row_count": 1,
+                "row_count": 2,
                 "col_count": 2,
                 "level": 0,
             },
@@ -222,7 +222,7 @@ def parse_hydra_configs(cfg: DictConfig):
             #     "particle_present": False,
             #     "compliant": True,
             #     "row_count": 2,
-            #     "col_count": 1,
+            #     "col_count": 2,
             #     "level": 0,
             # },
             # {

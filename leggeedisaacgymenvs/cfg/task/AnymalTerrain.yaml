@@ -18,16 +18,16 @@ env:
     ang_vel_yaw:   [-3, 3]
     curriculum_thresholds:
       tracking_length: 1
-      tracking_lin_vel_high: 0.85
+      tracking_lin_vel_high: 0.8
       tracking_lin_vel_low: 0.80
-      tracking_ang_vel_high: 0.80
+      tracking_ang_vel_high: 0.75
       tracking_ang_vel_low: 0.7
       tracking_eps_length_high: 0.95
       tracking_eps_length_low: 0.85
       num_bins_vel_x: 21
       num_bins_vel_y: 7
       num_bins_vel_yaw: 21
-      delta: 0.5
+      delta: 0.2
 
   terrain:
     measureHeights: True
@@ -40,7 +40,7 @@ env:
     numLevels: 10 # for no curriculum
     numTerrains: 20 # for no curriculum
 
-    curriculum: True  #level-based updates
+    curriculum: False  #level-based updates
     curriculum_thresholds:
       power: 0.0
       tracking_length: 2
@@ -74,7 +74,7 @@ env:
         compliant: True
         row_count: 10
         col_count: 10
-        level: 1
+        level: 0
 
       # - name: central_depression_terrain
       #   compliant: False
@@ -134,7 +134,7 @@ env:
         particle_system_max_neighborhood: 340 # Maximum number of neighboring particles to consider
         particle_system_solver_position_iteration_count: 64 # Solver iteration count for particle position adjustments
         particle_system_enable_ccd: False # Enable Continuous Collision Detection (CCD) for particles
-        particle_system_max_depenetration_velocity: 100.0 # Maximum velocity for depenetration corrections
+        particle_system_max_depenetration_velocity: 1.0 # Maximum velocity for depenetration corrections
 
         # Particle grid generation parameters
         particle_grid_spacing: 2.5
@@ -147,7 +147,7 @@ env:
       system2:
         pbd_material_friction: 0.8 # Friction value for particles
         pbd_material_density: 1500 # Density of particle material (kg/m³)#
-        pbd_material_damping: 10
+        pbd_material_damping: 2
         pbd_material_particle_friction_scale: 0.2 # Scale factor for particle-particle friction
         pbd_material_adhesion: 0.00001 # Adhesion coefficient for particles
         pbd_material_particle_adhesion_scale: 10000.0 # Scale factor for particle adhesion strength
@@ -162,7 +162,7 @@ env:
         particle_system_max_neighborhood: 340 # Maximum number of neighboring particles to consider
         particle_system_solver_position_iteration_count: 64 # Solver iteration count for particle position adjustments
         particle_system_enable_ccd: True # Enable Continuous Collision Detection (CCD) for particles
-        particle_system_max_depenetration_velocity: 100.0 # Maximum velocity for depenetration corrections
+        particle_system_max_depenetration_velocity: 1.0 # Maximum velocity for depenetration corrections
 
         # Particle grid generation parameters
         particle_grid_spacing: 2.5 #keep it greater than 2
@@ -172,7 +172,7 @@ env:
         particle_grid_particle_mass: 0.0 # Mass of each particle (can be overridden by density)
         particle_grid_density: 0.0 # Density of particles (optional, overrides individual mass)
 
-      system3: # New system matching the Fluid Isosurface demo properties
+      system3: # New system matching the Fluid properties
         pbd_material_density: 1500
         pbd_material_friction: 0.1
         pbd_material_damping: 0.0
@@ -189,7 +189,7 @@ env:
         particle_system_max_neighborhood: 96 # Maximum number of neighboring particles to consider
         particle_system_solver_position_iteration_count: 4 # Solver iteration count for particle position adjustments
         particle_system_enable_ccd: True # Enable Continuous Collision Detection (CCD) for particles
-        particle_system_max_depenetration_velocity: 100.0 # Maximum velocity for depenetration corrections
+        particle_system_max_depenetration_velocity: 1.0 # Maximum velocity for depenetration corrections
 
         # Grid generation parameters:
         particle_grid_spacing: 2.5
@@ -266,7 +266,7 @@ env:
       dof_pos_limits: -10.0
       # delta_torques: -1.0e-7
       # hip_motion: -0.5
-      orientation: -1.0
+      # orientation: -1.0
       # feet_contact_forces: -0.01 #-0.01
       termination: -1.0
 
@@ -299,10 +299,10 @@ env:
 
     #randomization
     pushEnabled: True
-    pushInterval_s: 7
+    pushInterval_s: 6
 
     # episode length in seconds
-    episodeLength_s: 10 #20
+    episodeLength_s: 8 #20
 
   randomizationRanges:
     randomizeEpisodeStart: True
@@ -317,7 +317,7 @@ env:
     gravityRange: [-1.0, 1.0]
 
     randomizeGravity: True
-    gravityRandIntervalSecs: 7
+    gravityRandIntervalSecs: 5
     randomizeFriction: True
     randomizeCOM: True
     randomizeAddedMass: True
@@ -335,7 +335,6 @@ env:
       enabled: True
       compliance:
         enabled: True
-        interval: 50
         stiffness: [500, 20000]
         damping_multiplier: [0.08, 0.8]
 
@@ -359,16 +358,16 @@ env:
             pbd_material_density_range: [1000, 2500]
             pbd_material_damping_range: [0, 5]
 
-          system3:
-            enabled: True
-            pbd_material_density_range: [1000, 2000]
-            pbd_material_friction_range: [0.1, 0.2]
-            pbd_material_damping_range: [0, 5]
-            pbd_material_cohesion_range: [0.01, 0.2]
-            # pbd_material_drag_range: [0.0, 0.1]
-            # pbd_material_lift_range: [0.0, 0.5]
-            # pbd_material_surface_tension_range: [0.0074, 0.1]
-            pbd_material_viscosity_range: [0.0000017, 0.0017]
+          # system3:
+          #   enabled: True
+          #   pbd_material_density_range: [1000, 2000]
+          #   pbd_material_friction_range: [0.1, 0.2]
+          #   pbd_material_damping_range: [0, 5]
+          #   pbd_material_cohesion_range: [0.01, 0.2]
+          #   # pbd_material_drag_range: [0.0, 0.1]
+          #   # pbd_material_lift_range: [0.0, 0.5]
+          #   # pbd_material_surface_tension_range: [0.0074, 0.1]
+          #   pbd_material_viscosity_range: [0.0000017, 0.0017]
 
 sim:
   dt: 0.005
