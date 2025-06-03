@@ -21,8 +21,8 @@ algorithm:
   use_clipped_value_loss: True
   clip_param: 0.2
   entropy_coef: 0.007 #0.01
-  num_learning_epochs: 7
-  num_mini_batches: 2
+  num_learning_epochs: 5
+  num_mini_batches: 3
   learning_rate: 1.0e-3 #7.e-4 #1.0e-3 #1.0e-3 #3.e-4  #5.e-4
   schedule: 'adaptive' #fixed #'adaptive'
   gamma: 0.99
@@ -42,7 +42,7 @@ algorithm:
 runner:
   policy_class_name: ActorCritic
   algorithm_class_name: PPO
-  num_steps_per_env: 62 #24
+  num_steps_per_env: 72 #24
   max_iterations: 3000
   save_interval: 500
   curriculum_log_interval: 10

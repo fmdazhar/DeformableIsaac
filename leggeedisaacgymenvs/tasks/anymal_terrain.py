@@ -515,7 +515,7 @@ class AnymalTerrainTask(RLTask):
 
     def update_terrain_level(self, env_ids):
 
-        if not self.init_done or not self.curriculum or self.flat:
+        if not self.init_done or self.flat:
             # do not change on initial reset
             return
         
@@ -530,35 +530,35 @@ class AnymalTerrainTask(RLTask):
         # torch.tensor(self.min_terrain_level, device=self.device),
         # self.terrain_levels[valid_envs]
         # )
+        if self.curriculum:
+            tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
+            tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
+            tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
+            
+            full_hist  = self.tracking_lin_vel_x_history_full[env_ids] 
+            current_max = self.unlocked_levels[env_ids].max()     
+            at_cap    = self.terrain_levels[env_ids] == current_max
 
-        tracking_lin_vel_high = self.terrain_curriculum_cfg["tracking_lin_vel_high"]* self.reward_scales["tracking_lin_vel"] / self.dt
-        tracking_ang_vel_high = self.terrain_curriculum_cfg["tracking_ang_vel_high"] * self.reward_scales["tracking_ang_vel"] / self.dt
-        tracking_episode_length = self.terrain_curriculum_cfg["tracking_eps_length_high"]
-        
-        full_hist  = self.tracking_lin_vel_x_history_full[env_ids] 
-        current_max = self.unlocked_levels[env_ids].max()     
-        at_cap    = self.terrain_levels[env_ids] == current_max
+            mask      = at_cap  & full_hist 
 
-        mask      = at_cap  & full_hist 
+            candidate_envs  = env_ids[mask] 
+            if candidate_envs.numel() > 0:
+                lin_mean = self.tracking_lin_vel_x_history[candidate_envs].mean(dim=1)
+                ang_mean = self.tracking_ang_vel_x_history[candidate_envs].mean(dim=1)
+                len_mean = self.ep_length_history[candidate_envs].mean(dim=1)
 
-        candidate_envs  = env_ids[mask] 
-        if candidate_envs.numel() > 0:
-            lin_mean = self.tracking_lin_vel_x_history[candidate_envs].mean(dim=1)
-            ang_mean = self.tracking_ang_vel_x_history[candidate_envs].mean(dim=1)
-            len_mean = self.ep_length_history[candidate_envs].mean(dim=1)
-
-            cond = (
-                (lin_mean > tracking_lin_vel_high) &
-                (ang_mean > tracking_ang_vel_high) &
-                (len_mean > tracking_episode_length)
-            )
-            promotable_envs = candidate_envs[cond]
-            if promotable_envs.numel() > 0:
-                self.unlocked_levels[promotable_envs] = torch.clamp(
-                    self.unlocked_levels[promotable_envs] + 1,
-                    max=self.max_terrain_level
+                cond = (
+                    (lin_mean > tracking_lin_vel_high) &
+                    (ang_mean > tracking_ang_vel_high) &
+                    (len_mean > tracking_episode_length)
                 )
-                self._clear_tracking_history(promotable_envs)
+                promotable_envs = candidate_envs[cond]
+                if promotable_envs.numel() > 0:
+                    self.unlocked_levels[promotable_envs] = torch.clamp(
+                        self.unlocked_levels[promotable_envs] + 1,
+                        max=self.max_terrain_level
+                    )
+                    self._clear_tracking_history(promotable_envs)
         
         # Resample the target terrain level
         span = self.unlocked_levels[env_ids] - self.min_terrain_level  
@@ -581,7 +581,7 @@ class AnymalTerrainTask(RLTask):
             candidate_indices = self._terrains_by_level[lvl.item()]
             n_envs   = group.shape[0]
             n_cands = candidate_indices.shape[0]
-            idxs = torch.arange(n_envs, device=self.device) % n_cands
+            idxs = torch.randint(0, n_cands, (n_envs,), device=self.device)
             chosen_rows = candidate_indices[idxs]
             self.env_grid[group] = self.terrain_details[chosen_rows, 0].long()
             self.bx_start[group] = self.terrain_details[chosen_rows, 10]

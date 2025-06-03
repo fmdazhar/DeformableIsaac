@@ -40,10 +40,10 @@ env:
     numLevels: 10 # for no curriculum
     numTerrains: 20 # for no curriculum
 
-    curriculum: False  #level-based updates
+    curriculum: True  #level-based updates
     curriculum_thresholds:
       power: 0.0
-      tracking_length: 2
+      tracking_length: 5
       tracking_lin_vel_high: 0.85
       tracking_lin_vel_low: 0.80
       tracking_ang_vel_high: 0.80
@@ -65,26 +65,26 @@ env:
       - name: flat
         particle_present: False
         compliant: False
-        row_count: 10
-        col_count: 10
+        row_count: 5
+        col_count: 6
         level: 0
 
       - name: flat
         particle_present: False
         compliant: True
-        row_count: 10
-        col_count: 10
+        row_count: 5
+        col_count: 6
         level: 0
 
-      # - name: central_depression_terrain
-      #   compliant: False
-      #   row_count: 1
-      #   col_count: 1
-      #   level: 1
-      #   particle_present: True
-      #   system: 1
-      #   depth: 0.1
-      #   size: 2           
+      - name: central_depression_terrain
+        compliant: True
+        row_count: 5
+        col_count: 6
+        level: 1
+        particle_present: True
+        system: 1
+        depth: 0.1
+        size: 8           
       
       # - name: central_depression_terrain
       #   compliant: True
