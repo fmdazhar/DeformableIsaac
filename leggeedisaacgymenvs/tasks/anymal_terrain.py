@@ -236,7 +236,7 @@ class AnymalTerrainTask(RLTask):
             self.pbd_by_sys = {}
 
         self._num_priv = (
-            (52 if self.priv_base else 0)
+            (40 if self.priv_base else 0)
         + (8  if self.priv_compliance else 0)
         + (self.pbd_parameters.shape[1] if (self.priv_pbd_particle and self.pbd_parameters is not None ) else 0)
         )
@@ -1194,7 +1194,7 @@ class AnymalTerrainTask(RLTask):
         self.a1_dof_soft_lower_limits = soft_lower_limits.to(device=self._device)
         self.a1_dof_soft_upper_limits = soft_upper_limits.to(device=self._device)
 
-        self.dof_vel_limits = self._anymals._physics_view.get_dof_max_velocities()[0].to(device=self._device)
+        # self.dof_vel_limits = self._anymals._physics_view.get_dof_max_velocities()[0].to(device=self._device)
         # self.torque_limits = self._anymals._physics_view.get_dof_max_forces()[0].to(device=self._device)
         self.dof_vel_limits = 21
         self.torque_limits = 33.5
@@ -1447,8 +1447,8 @@ class AnymalTerrainTask(RLTask):
         self.foot_pos, _ = self._anymals._foot.get_world_poses(clone=False)
 
     def refresh_net_contact_force_tensors(self):
-        self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
-        # self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
+        # self.foot_contact_forces = self.foot_contact_forces * 0.9 + self._anymals._foot.get_net_contact_forces(dt=self.dt,clone=False).view(self._num_envs, 4, 3) * 0.1
+        self.foot_contact_forces = self._anymals._foot.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.base_contact_forces = self._anymals._base.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 3)
         self.thigh_contact_forces = self._anymals._thigh.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
         self.calf_contact_forces = self._anymals._calf.get_net_contact_forces(clone=False,dt=self.dt).view(self._num_envs, 4, 3)
@@ -1466,9 +1466,10 @@ class AnymalTerrainTask(RLTask):
                     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.motor_strengths[1] * self.dof_vel
 
                 joint_vel = self.dof_vel.clone()
-                max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
+                safe_vel_limits = self.dof_vel_limits + 1e-8
+                max_eff = self.saturation_effort * (1.0 - joint_vel / safe_vel_limits)
                 max_eff   = torch.clip(max_eff, 0.0, self.torque_limits)
-                min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
+                min_eff = self.saturation_effort * (-1.0 - joint_vel / safe_vel_limits)
                 min_eff   = torch.clip(min_eff, -self.torque_limits, 0.0)
 
                 # torques = torch.clip(torques, -self.torque_limits, self.torque_limits)
@@ -1661,11 +1662,13 @@ class AnymalTerrainTask(RLTask):
             self.actions,
             self.contact_filt.float()
         ), dim=-1)  
+        proprio_obs = torch.clip(proprio_obs, -self.clip_obs, self.clip_obs)
+
 
         # 2) Add noise (only on proprio)
         if self.add_noise:
             proprio_obs += (2.0 * torch.rand_like(proprio_obs) - 1.0) * self.noise_scale_vec
-        proprio_obs = torch.clip(proprio_obs, -self.clip_obs, self.clip_obs)
+        
 
         # 3) If measuring heights, compute them and concatenate AFTER the proprio block.
         if self.measure_heights:
@@ -1680,6 +1683,8 @@ class AnymalTerrainTask(RLTask):
             final_obs_no_history = torch.cat([proprio_obs, heights], dim=-1)
         else:
             final_obs_no_history = proprio_obs
+        
+        final_obs_no_history = torch.clip(final_obs_no_history, -self.clip_obs, self.clip_obs)
         # 4) Build privileged observations
         priv_parts = []
         if self.priv_base:
@@ -1699,12 +1704,12 @@ class AnymalTerrainTask(RLTask):
             # contact_normals = normals * mask                         # [N,4,3]
             # priv_parts.append(contact_normals.reshape(self.num_envs, -1))
 
-            force_components = torch.clamp(
-                self.foot_contact_forces.view(self.num_envs, self.num_feet * 3)
-                * self.contact_force_scale,            # scale from cfg
-                min=-1.0, max=1.0                      # keep in [-1, 1]
-            )
-            priv_parts.append(force_components)
+            # force_components = torch.clamp(
+            #     self.foot_contact_forces.view(self.num_envs, self.num_feet * 3)
+            #     * self.contact_force_scale,            # scale from cfg
+            #     min=-1.0, max=1.0                      # keep in [-1, 1]
+            # )
+            # priv_parts.append(force_components)
         
         # compliance (soft contacts)
         if self.priv_compliance:
@@ -1729,12 +1734,14 @@ class AnymalTerrainTask(RLTask):
             # zero-length tensor per env
             priv_buf = torch.zeros((self.num_envs, 0), device=self.device, dtype=torch.float)
 
+        priv_buf = torch.clip(priv_buf, -self.clip_obs, self.clip_obs)
         # 5) Concatenate everything: [ (proprio + maybe heights) + priv_buf + obs_history ]
         self.obs_buf = torch.cat([
             final_obs_no_history,
             priv_buf,
             self.obs_history_buf.view(self.num_envs, -1)
         ], dim=-1)
+
 
         self.obs_history_buf = torch.where(
             (self.progress_buf <= 1)[:, None, None],                     # On (re)reset
@@ -1972,8 +1979,6 @@ class AnymalTerrainTask(RLTask):
 
                 # **Create Particle Grid under the existing system**
                 self.create_particle_grid(grid_key, terrain_row, system_name)
-        print(f"[INFO] Created {len(self.created_materials)} PBD Materials.")
-        print(f"[INFO] Created {self.total_particles} Particles.")
 
     def _enable_particle_system(self, system_name: str):
         """Switch a particle system on if it is still disabled."""
@@ -2264,9 +2269,16 @@ class AnymalTerrainTask(RLTask):
         key = (level, system_name, grid_key)
         self.initial_particle_positions[key] = Vt.Vec3fArray(positions)
         self.particle_counts[key] = count
+        # seed its reset counter:
+        self._reset_counters[key] = self.common_step_counter + random.randint(
+                self.particle_grid_reset_steps[0],
+                self.particle_grid_reset_steps[1],
+                )
         print(f"[INFO] Created {count} Particles at {particle_set_path}")
 
     def _reset_particle_grid(self, level: int, system_name: str, grid_key) -> None:
+        if not self._particle_system_enabled.get(system_name, False):
+            return
         key = (level, system_name, grid_key)
         if key not in self.initial_particle_positions:
             return  # Nothing to restore (should never happen)

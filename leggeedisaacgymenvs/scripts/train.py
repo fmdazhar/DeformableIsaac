@@ -233,8 +233,8 @@ def parse_hydra_configs(cfg: DictConfig):
                 "system": 1,
                 "depth": 0.10,
                 "size": 8,
-                "row_count": 1,
-                "col_count": 1,
+                "row_count": 6,
+                "col_count": 6,
             },
             # {
             #     "name": "central_depression_terrain",

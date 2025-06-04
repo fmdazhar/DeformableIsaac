@@ -30,7 +30,7 @@ env:
       delta: 0.2
 
   terrain:
-    measureHeights: True
+    measureHeights: False
     debugHeights: False
     staticFriction: 1.0 # [-]
     dynamicFriction: 1.0 # [-]
@@ -79,7 +79,7 @@ env:
       - name: central_depression_terrain
         compliant: True
         row_count: 5
-        col_count: 6
+        col_count: 3
         level: 1
         particle_present: True
         system: 1
@@ -411,7 +411,7 @@ sim:
     gpu_found_lost_aggregate_pairs_capacity: 256653680 #111111168 #88030000 #88026293 #44035072 #33554432 #111111168 #33554432
     gpu_total_aggregate_pairs_capacity: 4846000 #4194304
     gpu_max_soft_body_contacts: 1048576
-    gpu_max_particle_contacts: 1048576
+    gpu_max_particle_contacts: 20000000 #1048576
     gpu_heap_capacity: 134217728
     gpu_temp_buffer_capacity: 33554432
     gpu_max_num_partitions: 8
