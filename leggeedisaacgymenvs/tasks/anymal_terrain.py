@@ -1986,6 +1986,7 @@ class AnymalTerrainTask(RLTask):
         if ps_api:
             ps_api.GetParticleSystemEnabledAttr().Set(True)
             self._particle_system_enabled[system_name] = True
+            print("enabled")
 
     def create_pbd_material(self, system_name):
         # Retrieve material parameters from config based on system_name
@@ -2244,20 +2245,26 @@ class AnymalTerrainTask(RLTask):
             omni.kit.app.get_app().update()
             while (get_physx_cooking_interface().get_num_collision_tasks() != 0):
                 omni.kit.app.get_app().update()
-            positions = points.GetPointsAttr().Get()
-            count = len(positions)
-            self.total_particles += count
-            key = (level, system_name, grid_key)
-            self.initial_particle_positions[key] = Vt.Vec3fArray(positions)
-            self.particle_counts[key] = count
-            # seed its reset counter:
-            self._reset_counters[key] = self.common_step_counter + random.randint(
-                    self.particle_grid_reset_steps[0],
-                    self.particle_grid_reset_steps[1],
-                    )
-            print(f"[INFO] Created {count} Particles at {particle_set_path}")
-        else:
-            print(f"[INFO] Particle Point Instancer already exists at {particle_set_path}")
+            asyncio.get_event_loop().create_task(
+            self._finalise_particle_set(points, particle_set_path, level, system_name, grid_key))
+            
+    async def _wait_for_sampler(self, points_prim, timeout_frames=120):
+        app = omni.kit.app.get_app()
+        for _ in range(timeout_frames):
+            await app.next_update_async()                       # ① wait one frame
+            pts = points_prim.GetPointsAttr().Get() or []
+            if len(pts):                                        # ② sampler finished
+                return pts
+        raise RuntimeError("Particle sampler timed out")
+
+    async def _finalise_particle_set(self, points_prim, particle_set_path, level, system_name, grid_key):
+        positions = await self._wait_for_sampler(points_prim)   # safe: we’re inside async def
+        count     = len(positions)
+        self.total_particles += count
+        key = (level, system_name, grid_key)
+        self.initial_particle_positions[key] = Vt.Vec3fArray(positions)
+        self.particle_counts[key] = count
+        print(f"[INFO] Created {count} Particles at {particle_set_path}")
 
     def _reset_particle_grid(self, level: int, system_name: str, grid_key) -> None:
         key = (level, system_name, grid_key)
