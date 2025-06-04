@@ -66,20 +66,20 @@ env:
         particle_present: False
         compliant: False
         row_count: 5
-        col_count: 6
+        col_count: 5
         level: 0
 
       - name: flat
         particle_present: False
         compliant: True
         row_count: 5
-        col_count: 6
+        col_count: 5
         level: 0
 
       - name: central_depression_terrain
         compliant: True
-        row_count: 5
-        col_count: 3
+        row_count: 1
+        col_count: 5
         level: 1
         particle_present: True
         system: 1
@@ -348,7 +348,7 @@ env:
             pbd_material_particle_friction_scale_range: [0.15, 0.3]
             pbd_material_particle_adhesion_scale_range: [500, 3000]
             pbd_material_density_range: [1000, 2500]
-            pbd_material_damping_range: [0, 5]
+            pbd_material_damping_range: [1, 5]
 
           system2: #0.15
             enabled: True
@@ -356,7 +356,7 @@ env:
             pbd_material_particle_friction_scale_range: [0.15, 0.3]
             pbd_material_particle_adhesion_scale_range: [1000, 5000]
             pbd_material_density_range: [1000, 2500]
-            pbd_material_damping_range: [0, 5]
+            pbd_material_damping_range: [1, 5]
 
           # system3:
           #   enabled: True

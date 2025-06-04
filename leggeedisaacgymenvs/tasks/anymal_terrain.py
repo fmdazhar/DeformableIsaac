@@ -1294,10 +1294,10 @@ class AnymalTerrainTask(RLTask):
             (len(env_ids), 3), 
             device=self.device
         )  # shape: (N,3)
-        orient_delta = quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2])                    
-        base_q_init  = self.base_init_state[3:7] 
-        base_q_batch = base_q_init.unsqueeze(0).expand(len(env_ids), 4)                                   
-        new_quats    = quat_mul(base_q_batch, orient_delta)                        
+        orient_delta = quat_safe_normalize(quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2]))                   
+        base_q_init  =  quat_safe_normalize(self.base_init_state[3:7] )
+        base_q_batch = quat_safe_normalize(base_q_init.unsqueeze(0).expand(len(env_ids), 4))                                 
+        new_quats    = quat_safe_normalize(quat_mul(base_q_batch, orient_delta))                       
         self.base_quat[env_ids] = new_quats
 
         self.base_velocities[env_ids] = self.base_init_state[7:]
@@ -1443,6 +1443,7 @@ class AnymalTerrainTask(RLTask):
 
     def refresh_body_state_tensors(self):
         self.base_pos, self.base_quat = self._anymals.get_world_poses(clone=False)
+        self.base_quat = quat_safe_normalize(self.base_quat)
         self.base_velocities = self._anymals.get_velocities(clone=False)
         self.foot_pos, _ = self._anymals._foot.get_world_poses(clone=False)
 
@@ -2763,6 +2764,35 @@ def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
 
     return torch.stack([w, x, y, z], dim=-1).view(shape)
 
+@torch.jit.script
+def quat_safe_normalize(q: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Return a valid unit quaternion for any ❰…,4❱ tensor `q`.
+    • Replaces NaN/Inf with zeros.
+    • If ‖q‖ is tiny, returns the identity quaternion 〈1,0,0,0〉.
+    • Flips sign so that w ≥ 0 (unique representation).
+    Guaranteed: no in-place masked writes ⇒ works in Torch-Script / CUDA.
+    """
+    # 1️⃣  clear NaN / Inf
+    q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+
+    # 2️⃣  normalise (safe denominator)
+    n = torch.norm(q, dim=-1, keepdim=True)               # …×1
+    n_safe = torch.clamp(n, min=eps)
+    q = q / n_safe
+
+    # 3️⃣  fallback to identity when ‖q‖ was ~0
+    tiny = (n < eps * 10.0)                               # …×1 bool
+    ident = torch.zeros_like(q)
+    ident[..., 0] = 1.0
+    q = torch.where(tiny, ident, q)                       # broadcasts
+
+    # 4️⃣  make w (element 0) non-negative
+    sign = torch.where(q[..., 0:1] < 0.0,
+                       -torch.ones_like(q[..., 0:1]),
+                        torch.ones_like(q[..., 0:1]))
+    q = q * sign                                          # broadcasts to …×4
+    return q
 
 def sample_uniform(
     lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str
