@@ -1938,7 +1938,7 @@ class AnymalTerrainTask(RLTask):
                         
                         particle_system = ParticleSystem(
                             prim_path=particle_system_path,
-                            particle_system_enabled=False,
+                            particle_system_enabled=True,
                             simulation_owner="/physicsScene",
                             rest_offset=self._particle_cfg[system_name].get("particle_system_rest_offset", None),
                             contact_offset=self._particle_cfg[system_name].get("particle_system_contact_offset", None),
@@ -1971,7 +1971,7 @@ class AnymalTerrainTask(RLTask):
 
                         print(f"[INFO] Created Particle System: {particle_system_path}")
                     self.created_particle_systems[system_name] = particle_system_path
-                    self._particle_system_enabled[system_name] = False
+                    self._particle_system_enabled[system_name] = True
 
                 # **Create PBD Material if not already created**
                 if material_key not in self.created_materials:
@@ -2226,7 +2226,7 @@ class AnymalTerrainTask(RLTask):
 
             # Apply particle sampling on the mesh
             sampling_api = PhysxSchema.PhysxParticleSamplingAPI.Apply(cube_mesh.GetPrim())
-            # sampling_api.CreateSamplingDistanceAttr().Set(particle_sampler_distance)
+            sampling_api.CreateSamplingDistanceAttr().Set(particle_sampler_distance)
             sampling_api.CreateMaxSamplesAttr().Set(5e5)
             sampling_api.CreateVolumeAttr().Set(True)  # Set to True if sampling volume, False for surface
             cube_mesh.CreateVisibilityAttr("invisible")

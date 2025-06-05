@@ -3,7 +3,7 @@ name: AnymalTerrain
 physics_engine: ${..physics_engine}
 
 env:
-  numEnvs: ${resolve_default:1000,${...num_envs}}
+  numEnvs: ${resolve_default:500,${...num_envs}}
   clipObservations: 100
   # clipActions: 5
 
@@ -76,15 +76,15 @@ env:
         col_count: 5
         level: 0
 
-      - name: central_depression_terrain
-        compliant: True
-        row_count: 1
-        col_count: 5
-        level: 1
-        particle_present: True
-        system: 1
-        depth: 0.1
-        size: 8           
+      # - name: central_depression_terrain
+      #   compliant: True
+      #   row_count: 3
+      #   col_count: 5
+      #   level: 1
+      #   particle_present: True
+      #   system: 2
+      #   depth: 0.05
+      #   size: 7           
       
       # - name: central_depression_terrain
       #   compliant: True
@@ -120,7 +120,7 @@ env:
         pbd_material_friction: 0.8 # Friction value for particles
         pbd_material_density: 1500 # Density of particle material (kg/m³)
         pbd_material_damping: 2
-        pbd_material_particle_friction_scale: 0.2 # Scale factor for particle-particle friction
+        pbd_material_particle_friction_scale: 0.02 # Scale factor for particle-particle friction
         pbd_material_adhesion: 0.00001 # Adhesion coefficient for particles
         pbd_material_particle_adhesion_scale: 10000.0 # Scale factor for particle adhesion strength
         pbd_material_adhesion_offset_scale: 1.2 # Offset scale for adhesion calculations
@@ -161,11 +161,11 @@ env:
         particle_system_max_velocity: 100.0 # Maximum allowable particle velocity
         particle_system_max_neighborhood: 340 # Maximum number of neighboring particles to consider
         particle_system_solver_position_iteration_count: 64 # Solver iteration count for particle position adjustments
-        particle_system_enable_ccd: True # Enable Continuous Collision Detection (CCD) for particles
+        particle_system_enable_ccd: False # Enable Continuous Collision Detection (CCD) for particles
         particle_system_max_depenetration_velocity: 1.0 # Maximum velocity for depenetration corrections
 
         # Particle grid generation parameters
-        particle_grid_spacing: 2.5 #keep it greater than 2
+        particle_grid_spacing: 2.2 #keep it greater than 2
         particle_grid_jitter_factor: 0.2 # Random jitter factor for particle spacing (as a fraction of particle spacing)
         particle_grid_self_collision: True # Enable self-collision within the particle grid
         particle_grid_fluid: False # Set to True if particles should behave like a fluid
@@ -302,7 +302,7 @@ env:
     pushInterval_s: 6
 
     # episode length in seconds
-    episodeLength_s: 8 #20
+    episodeLength_s: 7 #20
 
   randomizationRanges:
     randomizeEpisodeStart: True
@@ -411,7 +411,7 @@ sim:
     gpu_found_lost_aggregate_pairs_capacity: 256653680 #111111168 #88030000 #88026293 #44035072 #33554432 #111111168 #33554432
     gpu_total_aggregate_pairs_capacity: 4846000 #4194304
     gpu_max_soft_body_contacts: 1048576
-    gpu_max_particle_contacts: 20000000 #1048576
+    gpu_max_particle_contacts: 1048576 #20000000 #1048576
     gpu_heap_capacity: 134217728
     gpu_temp_buffer_capacity: 33554432
     gpu_max_num_partitions: 8
