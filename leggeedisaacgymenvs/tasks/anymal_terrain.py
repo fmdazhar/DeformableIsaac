@@ -206,7 +206,6 @@ class AnymalTerrainTask(RLTask):
 
         self._task_cfg["sim"]["add_ground_plane"] = False
         self._particle_cfg = self._task_cfg["env"]["terrain"]["particles"]
-        self._particle_cfg_original = copy.deepcopy(self._particle_cfg)
         secs_min, secs_max = self._task_cfg["env"]["terrain"]["particles"]["resetIntervalSecs"]
         self.particle_grid_reset_steps = [
                     int(secs_min / self.dt + 0.5),
@@ -1294,10 +1293,11 @@ class AnymalTerrainTask(RLTask):
             (len(env_ids), 3), 
             device=self.device
         )  # shape: (N,3)
-        orient_delta = quat_safe_normalize(quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2]))                   
-        base_q_init  =  quat_safe_normalize(self.base_init_state[3:7] )
-        base_q_batch = quat_safe_normalize(base_q_init.unsqueeze(0).expand(len(env_ids), 4))                                 
-        new_quats    = quat_safe_normalize(quat_mul(base_q_batch, orient_delta))                       
+        orient_delta = quat_from_euler_xyz(rpy[:, 0], rpy[:, 1], rpy[:, 2])  
+        orient_delta = quat_unique(orient_delta)  # ensure uniqueness                 
+        base_q_init  =  self.base_init_state[3:7]
+        base_q_batch = base_q_init.unsqueeze(0).expand(len(env_ids), 4)                              
+        new_quats    = quat_mul(base_q_batch, orient_delta)                       
         self.base_quat[env_ids] = new_quats
 
         self.base_velocities[env_ids] = self.base_init_state[7:]
@@ -1443,7 +1443,6 @@ class AnymalTerrainTask(RLTask):
 
     def refresh_body_state_tensors(self):
         self.base_pos, self.base_quat = self._anymals.get_world_poses(clone=False)
-        self.base_quat = quat_safe_normalize(self.base_quat)
         self.base_velocities = self._anymals.get_velocities(clone=False)
         self.foot_pos, _ = self._anymals._foot.get_world_poses(clone=False)
 
@@ -1511,9 +1510,9 @@ class AnymalTerrainTask(RLTask):
                     )
 
             # prepare quantities
-            self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 0:3])
-            self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.base_velocities[:, 3:6])
-            self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+            self.base_lin_vel = quat_apply_inverse(self.base_quat, self.base_velocities[:, 0:3])
+            self.base_ang_vel = quat_apply_inverse(self.base_quat, self.base_velocities[:, 3:6])
+            self.projected_gravity = quat_apply_inverse(self.base_quat, self.gravity_vec)
 
 
             if self.measure_heights:
@@ -1662,7 +1661,9 @@ class AnymalTerrainTask(RLTask):
             self.dof_vel * self.dof_vel_scale,
             self.actions,
             self.contact_filt.float()
-        ), dim=-1)  
+        ), dim=-1) 
+
+        proprio_obs = torch.nan_to_num(proprio_obs, nan=0.0) 
         proprio_obs = torch.clip(proprio_obs, -self.clip_obs, self.clip_obs)
 
 
@@ -1684,7 +1685,8 @@ class AnymalTerrainTask(RLTask):
             final_obs_no_history = torch.cat([proprio_obs, heights], dim=-1)
         else:
             final_obs_no_history = proprio_obs
-        
+
+        final_obs_no_history = torch.nan_to_num(final_obs_no_history, nan=0.0) 
         final_obs_no_history = torch.clip(final_obs_no_history, -self.clip_obs, self.clip_obs)
         # 4) Build privileged observations
         priv_parts = []
@@ -1735,7 +1737,9 @@ class AnymalTerrainTask(RLTask):
             # zero-length tensor per env
             priv_buf = torch.zeros((self.num_envs, 0), device=self.device, dtype=torch.float)
 
+        priv_buf = torch.nan_to_num(priv_buf, nan=0.0)
         priv_buf = torch.clip(priv_buf, -self.clip_obs, self.clip_obs)
+        
         # 5) Concatenate everything: [ (proprio + maybe heights) + priv_buf + obs_history ]
         self.obs_buf = torch.cat([
             final_obs_no_history,
@@ -2226,7 +2230,7 @@ class AnymalTerrainTask(RLTask):
 
             # Apply particle sampling on the mesh
             sampling_api = PhysxSchema.PhysxParticleSamplingAPI.Apply(cube_mesh.GetPrim())
-            sampling_api.CreateSamplingDistanceAttr().Set(particle_sampler_distance)
+            # sampling_api.CreateSamplingDistanceAttr().Set(particle_sampler_distance)
             sampling_api.CreateMaxSamplesAttr().Set(5e5)
             sampling_api.CreateVolumeAttr().Set(True)  # Set to True if sampling volume, False for surface
             cube_mesh.CreateVisibilityAttr("invisible")
@@ -2311,12 +2315,12 @@ class AnymalTerrainTask(RLTask):
         particleUtils.configure_particle_set(
             instancer_prim,
             f"/World/particleSystem/{system_name}",
-            self._particle_cfg_original[system_name]["particle_grid_self_collision"],
-            self._particle_cfg_original[system_name]["particle_grid_fluid"],
+            self._particle_cfg[system_name]["particle_grid_self_collision"],
+            self._particle_cfg[system_name]["particle_grid_fluid"],
             grid_key,
-            self._particle_cfg_original[system_name]["particle_grid_particle_mass"]
+            self._particle_cfg[system_name]["particle_grid_particle_mass"]
             * len(init_positions),
-            self._particle_cfg_original[system_name]["particle_grid_density"],
+            self._particle_cfg[system_name]["particle_grid_density"],
         )
 
         # 3  Reset the envs in resetted grid
@@ -2727,6 +2731,21 @@ def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tens
     return torch.stack([qw, qx, qy, qz], dim=-1)
 
 @torch.jit.script
+def quat_unique(q: torch.Tensor) -> torch.Tensor:
+    """Convert a unit quaternion to a standard form where the real part is non-negative.
+
+    Quaternion representations have a singularity since ``q`` and ``-q`` represent the same
+    rotation. This function ensures the real part of the quaternion is non-negative.
+
+    Args:
+        q: The quaternion orientation in (w, x, y, z). Shape is (..., 4).
+
+    Returns:
+        Standardized quaternions. Shape is (..., 4).
+    """
+    return torch.where(q[..., 0:1] < 0, -q, q)
+
+@torch.jit.script
 def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
     """Multiply two quaternions together.
 
@@ -2765,34 +2784,25 @@ def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
     return torch.stack([w, x, y, z], dim=-1).view(shape)
 
 @torch.jit.script
-def quat_safe_normalize(q: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
+    """Apply an inverse quaternion rotation to a vector.
+
+    Args:
+        quat: The quaternion in (w, x, y, z). Shape is (..., 4).
+        vec: The vector in (x, y, z). Shape is (..., 3).
+
+    Returns:
+        The rotated vector in (x, y, z). Shape is (..., 3).
     """
-    Return a valid unit quaternion for any ❰…,4❱ tensor `q`.
-    • Replaces NaN/Inf with zeros.
-    • If ‖q‖ is tiny, returns the identity quaternion 〈1,0,0,0〉.
-    • Flips sign so that w ≥ 0 (unique representation).
-    Guaranteed: no in-place masked writes ⇒ works in Torch-Script / CUDA.
-    """
-    # 1️⃣  clear NaN / Inf
-    q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
-
-    # 2️⃣  normalise (safe denominator)
-    n = torch.norm(q, dim=-1, keepdim=True)               # …×1
-    n_safe = torch.clamp(n, min=eps)
-    q = q / n_safe
-
-    # 3️⃣  fallback to identity when ‖q‖ was ~0
-    tiny = (n < eps * 10.0)                               # …×1 bool
-    ident = torch.zeros_like(q)
-    ident[..., 0] = 1.0
-    q = torch.where(tiny, ident, q)                       # broadcasts
-
-    # 4️⃣  make w (element 0) non-negative
-    sign = torch.where(q[..., 0:1] < 0.0,
-                       -torch.ones_like(q[..., 0:1]),
-                        torch.ones_like(q[..., 0:1]))
-    q = q * sign                                          # broadcasts to …×4
-    return q
+    # store shape
+    shape = vec.shape
+    # reshape to (N, 3) for multiplication
+    quat = quat.reshape(-1, 4)
+    vec = vec.reshape(-1, 3)
+    # extract components from quaternions
+    xyz = quat[:, 1:]
+    t = xyz.cross(vec, dim=-1) * 2
+    return (vec - quat[:, 0:1] * t + xyz.cross(t, dim=-1)).view(shape)
 
 def sample_uniform(
     lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str
@@ -2823,3 +2833,4 @@ def get_axis_params(value, axis_idx, x_value=0.0, dtype=float, n_dims=3):
     params = np.where(zs == 1.0, value, zs)
     params[0] = x_value
     return list(params.astype(dtype))
+
