@@ -51,7 +51,7 @@ class AnymalTerrainTask(RLTask):
         self.update_config()
 
         self._num_actions = 12
-        self._num_proprio = 52 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12 + 4
+        self._num_proprio = 48 #188 #3 + 3 + 3 + 3 + 12 + 12 + 12
         self._num_privileged_observations = None
         # self._num_priv = 28 # 4 + 4 + 4 + 1 + 3 + 12 
         self._obs_history_length = 10  # e.g., 3, 5, etc.
@@ -75,15 +75,13 @@ class AnymalTerrainTask(RLTask):
             (self.num_envs, 12), dtype=torch.float, device=self.device, requires_grad=False
         )
 
-        if self.measure_heights:
-            self.height_points = self.init_height_points()
-            self.measured_heights = torch.zeros(
-                (self.num_envs, self._num_height_points),
-                dtype=torch.float,
-                device=self.device
-            )
-        else:
-            self.measured_heights = None
+        self.height_points = self.init_height_points()
+        self.measured_heights = torch.zeros(
+            (self.num_envs, self._num_height_points),
+            dtype=torch.float,
+            device=self.device
+        )
+
         
         self._start_randomized = False
         # Initialize dictionaries to track created particle systems and materials
@@ -315,15 +313,18 @@ class AnymalTerrainTask(RLTask):
         self.pbd_param_names = sorted(merged.keys())
         self.pbd_range = [merged[k] for k in self.pbd_param_names]
 
-        self.pbd_param_names.append("solid_rest_offset")
-        if sro_vals:
-            min_sro, max_sro = min(sro_vals), max(sro_vals)
-        else:
-            min_sro = max_sro = 0.0
-        self.pbd_range.append([min_sro, max_sro])
+        # self.pbd_param_names.append("solid_rest_offset")
+        # if sro_vals:
+        #     min_sro, max_sro = min(sro_vals), max(sro_vals)
+        # else:
+        #     min_sro = max_sro = 0.0
+        # self.pbd_range.append([min_sro, max_sro])
 
-        self.pbd_param_names += ["particles_present", "fluid_present"]
-        self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
+        # self.pbd_param_names += ["particles_present", "fluid_present"]
+        # self.pbd_range += [[0.0, 1.0], [0.0, 1.0]] 
+
+        self.pbd_param_names += ["particles_present"]
+        self.pbd_range += [[0.0, 1.0]] 
 
         self.pbd_parameters = torch.zeros((self.num_envs, len(self.pbd_param_names)),
                                            dtype=torch.float32,
@@ -957,12 +958,12 @@ class AnymalTerrainTask(RLTask):
         self.pbd_parameters[env_ids] = 0.0  # Reset to 0 for all envs first
         sys_ids      = self.system_idx[env_ids]                       # shape (B,)
         particles_f  = (sys_ids > 0).float()                          # 1.0 if any system
-        fluid_list   = [ self._system_is_fluid.get(int(s), 0.0) for s in sys_ids ]
-        fluid_f      = torch.tensor(fluid_list, dtype=torch.float32, device=self.device)
         idx_part     = self._pbd_idx["particles_present"]
-        idx_fluid    = self._pbd_idx["fluid_present"]
         self.pbd_parameters[env_ids, idx_part]  = particles_f
-        self.pbd_parameters[env_ids, idx_fluid] = fluid_f
+        # fluid_list   = [ self._system_is_fluid.get(int(s), 0.0) for s in sys_ids ]
+        # fluid_f      = torch.tensor(fluid_list, dtype=torch.float32, device=self.device)
+        # idx_fluid    = self._pbd_idx["fluid_present"]
+        # self.pbd_parameters[env_ids, idx_fluid] = fluid_f
 
         # Grab unique systems in the batch
         unique_systems = torch.unique(sys_ids)
@@ -984,9 +985,9 @@ class AnymalTerrainTask(RLTask):
                 val = mat_cfg.get(param_name, 0.0)
                 self.pbd_parameters[target_envs, col] = float(val)
 
-            # Finally, handle solid_rest_offset for active systems
-            val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
-            self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
+            # # Finally, handle solid_rest_offset for active systems
+            # val = float(self._particle_cfg[f"system{int(sid)}"].get("particle_system_solid_rest_offset", 0.0))
+            # self.pbd_parameters[target_envs, self._pbd_idx["solid_rest_offset"]] = val
 
 
     def randomize_pbd_material(self):
@@ -1195,9 +1196,11 @@ class AnymalTerrainTask(RLTask):
 
         # self.dof_vel_limits = self._anymals._physics_view.get_dof_max_velocities()[0].to(device=self._device)
         # self.torque_limits = self._anymals._physics_view.get_dof_max_forces()[0].to(device=self._device)
-        self.dof_vel_limits = 21
-        self.torque_limits = 33.5
-        self.saturation_effort = 33.5
+
+        self.dof_vel_limits = torch.full((self.num_envs, self.num_actions), 21.0, device=self.device)
+        self.torque_limits  = torch.full((self.num_envs, self.num_actions), 33.5, device=self.device)
+        self.saturation_effort  = torch.full((self.num_envs, self.num_actions), 33.5, device=self.device)
+
         if self._task_cfg["env"]["randomizationRanges"]["randomizeAddedMass"]:
             self._set_mass(self._anymals._base, env_ids=env_ids)
         if self._task_cfg["env"]["randomizationRanges"]["randomizeCOM"]:
@@ -1466,13 +1469,21 @@ class AnymalTerrainTask(RLTask):
                     self.joint_pos_target - self.dof_pos + self.motor_offsets) - self.Kd * self.Kd_factors * self.motor_strengths[1] * self.dof_vel
 
                 joint_vel = self.dof_vel.clone()
-                safe_vel_limits = self.dof_vel_limits + 1e-8
-                max_eff = self.saturation_effort * (1.0 - joint_vel / safe_vel_limits)
-                max_eff   = torch.clip(max_eff, 0.0, self.torque_limits)
-                min_eff = self.saturation_effort * (-1.0 - joint_vel / safe_vel_limits)
-                min_eff   = torch.clip(min_eff, -self.torque_limits, 0.0)
+                # compute the “upper‐bound” effort:
+                max_eff = self.saturation_effort * (1.0 - joint_vel / self.dof_vel_limits)
+                # both min and max must be tensors:
+                zeros = torch.zeros_like(self.torque_limits)
+                max_eff = torch.clip(max_eff, zeros, self.torque_limits)
 
-                # torques = torch.clip(torques, -self.torque_limits, self.torque_limits)
+                # compute the “lower‐bound” effort:
+                min_eff = self.saturation_effort * (-1.0 - joint_vel / self.dof_vel_limits)
+                min_eff = torch.clip(min_eff, -self.torque_limits, zeros)
+
+                torques = self.Kp * self.Kp_factors * self.motor_strengths[0] * (
+                    self.joint_pos_target - self.dof_pos + self.motor_offsets
+                ) - self.Kd * self.Kd_factors * self.motor_strengths[1] * self.dof_vel
+
+                # now clamp torques between min_eff and max_eff:
                 torques = torch.clip(torques, min_eff, max_eff)
 
                 self._anymals.set_joint_efforts(torques)
@@ -1521,7 +1532,7 @@ class AnymalTerrainTask(RLTask):
                         asyncio.get_event_loop().create_task(
                         self._update_and_query_particles(visualize=False)
                         )
-                self.get_heights_below_foot()
+            self.get_heights_below_foot()
 
             self.check_termination()
             self.compute_reward()
@@ -1574,15 +1585,7 @@ class AnymalTerrainTask(RLTask):
         """
 
         # 1) Discover all reward methods
-        all_methods = [name[8:] for name in dir(self) if name.startswith('_reward_')]
-
-        if not self.measure_heights:
-            self.reward_scales.pop("base_height", None)
-
-        # 2) If base_height isn’t active, remove it from the list too
-        if not self.measure_heights and "base_height" in all_methods:
-            all_methods.remove("base_height")
-        self.all_reward_methods = all_methods
+        self.all_reward_methods = [name[8:] for name in dir(self) if name.startswith('_reward_')]
 
         # remove zero scales + multiply non-zero ones by dt
         for key in list(self.reward_scales.keys()):
@@ -1660,7 +1663,7 @@ class AnymalTerrainTask(RLTask):
             self.dof_pos * self.dof_pos_scale,
             self.dof_vel * self.dof_vel_scale,
             self.actions,
-            self.contact_filt.float()
+            # self.contact_filt.float()
         ), dim=-1) 
 
         proprio_obs = torch.nan_to_num(proprio_obs, nan=0.0) 
@@ -1739,7 +1742,7 @@ class AnymalTerrainTask(RLTask):
 
         priv_buf = torch.nan_to_num(priv_buf, nan=0.0)
         priv_buf = torch.clip(priv_buf, -self.clip_obs, self.clip_obs)
-        
+
         # 5) Concatenate everything: [ (proprio + maybe heights) + priv_buf + obs_history ]
         self.obs_buf = torch.cat([
             final_obs_no_history,
